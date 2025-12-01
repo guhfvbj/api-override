@@ -81,6 +81,20 @@ def _strip_trailing_slash(url: str) -> str:
     return url[:-1] if url.endswith("/") else url
 
 
+def _log_payload(label: str, payload: Any, limit: int = 2000) -> None:
+    """调试用：记录请求/响应体（截断避免过大日志）。"""
+    try:
+        if isinstance(payload, (dict, list)):
+            text = json.dumps(payload, ensure_ascii=False)
+        else:
+            text = str(payload)
+        if len(text) > limit:
+            text = text[:limit] + "...(truncated)"
+        logger.info("%s: %s", label, text)
+    except Exception:
+        logger.warning("记录 %s 时失败", label)
+
+
 NEWAPI_BASE_URL = _strip_trailing_slash(NEWAPI_BASE_URL)
 
 
@@ -371,6 +385,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     patched_body = apply_overrides(body, request.app.state.override_map)
     cleaned_body = _strip_undefined_fields(patched_body)
     is_stream = bool(cleaned_body.get("stream"))
+    _log_payload("转发请求体", cleaned_body)
     incoming_model = body.get("model")
     rule = request.app.state.override_map.get(incoming_model) or request.app.state.override_map.get(
         patched_body.get("model")
@@ -402,6 +417,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
         raise HTTPException(status_code=resp.status_code, detail=_extract_error(resp))
 
     payload = _extract_payload(resp)
+    _log_payload("上游响应体", payload)
     response_repls: Dict[str, str] = {}
     if rule:
         if rule.response_replacements:

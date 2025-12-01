@@ -155,21 +155,37 @@ def _build_upstream_headers() -> Dict[str, str]:
 
 
 async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dict[str, str]] = None):
-    """包装上游流式响应，支持字符串替换并容错 StreamClosed。"""
+    """按 SSE data 行解析并可选进行字符串替换，兼容 StreamClosed。"""
     try:
         async for chunk in upstream_resp.aiter_raw():
-            data = chunk
-            if replacements:
-                try:
-                    text = chunk.decode("utf-8", errors="ignore")
-                    for src, dst in replacements.items():
-                        if src is None or dst is None:
-                            continue
-                        text = text.replace(str(src), str(dst))
-                    data = text.encode("utf-8")
-                except Exception:
-                    logger.debug("响应流替换失败，回退原始数据块")
-            yield data
+            if not replacements:
+                yield chunk
+                continue
+
+            try:
+                text = chunk.decode("utf-8", errors="ignore")
+            except Exception:
+                yield chunk
+                continue
+
+            out_lines = []
+            lines = text.splitlines()
+            for line in lines:
+                if line.startswith("data:"):
+                    data_part = line[5:].lstrip()
+                    try:
+                        obj = json.loads(data_part)
+                        patched = _apply_replacements_to_any(obj, replacements)
+                        out_lines.append("data: " + json.dumps(patched, ensure_ascii=False))
+                    except Exception:
+                        out_lines.append(line)
+                else:
+                    out_lines.append(line)
+
+            new_text = "\n".join(out_lines)
+            if text.endswith("\n"):
+                new_text += "\n"
+            yield new_text.encode("utf-8")
     except httpx.StreamClosed:
         logger.warning("上游流已关闭，提前结束推送")
     except Exception:
@@ -408,7 +424,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     url = f"{NEWAPI_BASE_URL}/v1/chat/completions"
     headers = _build_upstream_headers()
 
-    # ��Ӧ�滻������ͬʱӦ���ڷǻ����������ʽӦ��
+    # ?????????????? JSON ?????????? text/thinking???????
     response_repls: Dict[str, str] = {}
     if rule:
         if rule.response_replacements:
@@ -447,12 +463,6 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
     payload = _extract_payload(resp)
     _log_payload("上游响应体", payload)
-    response_repls: Dict[str, str] = {}
-    if rule:
-        if rule.response_replacements:
-            response_repls.update(rule.response_replacements)
-        if rule.replacements:
-            response_repls.update(rule.replacements)
     if response_repls:
         payload = _apply_replacements_to_any(payload, response_repls)
         logger.info("响应替换已应用，模型=%s，规则数=%s", incoming_model, len(response_repls))

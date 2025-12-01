@@ -155,94 +155,69 @@ def _build_upstream_headers() -> Dict[str, str]:
 
 
 async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dict[str, str]] = None):
-    """按 SSE 事件缓冲解析并覆写 JSON 字段（含 text），兼容 StreamClosed。"""
+    """????? <thinking>/<\/thinking>????????????? StreamClosed?"""
+    open_tag = "<thinking>"
+    close_tag = "</thinking>"
+    replaced_open = False
+    replaced_close = False
+    tail_len = max(len(open_tag), len(close_tag)) - 1
+    tail = ""
+
+    # ?????????
     if not replacements:
         try:
             async for chunk in upstream_resp.aiter_raw():
                 yield chunk
         except httpx.StreamClosed:
-            logger.warning("上游流已关闭，提前结束推送")
+            logger.warning("?????????????")
         except Exception:
-            logger.exception("转发流式响应时发生异常")
+            logger.exception("???????????")
             raise
         return
 
-    buffer = ""
     try:
         async for piece in upstream_resp.aiter_text():
-            buffer += piece
-            while True:
-                sep_pos = buffer.find("\n\n")
-                sep_len = 2
-                if sep_pos == -1:
-                    sep_pos = buffer.find("\r\n\r\n")
-                    if sep_pos != -1:
-                        sep_len = 4
-                if sep_pos == -1:
-                    break
+            if replaced_open and replaced_close:
+                yield piece.encode("utf-8")
+                continue
 
-                event, buffer = buffer[:sep_pos], buffer[sep_pos + sep_len :]
-                lines = event.splitlines()
-                out_lines = []
-                for line in lines:
-                    if line.startswith("data:"):
-                        raw = line[5:].lstrip()
-                        if raw.strip() == "[DONE]":
-                            out_lines.append("data: [DONE]")
-                            continue
-                        try:
-                            obj = json.loads(raw)
-                            patched = _apply_replacements_to_any(obj, replacements)
-                            patched = _fix_thinking_prefix(patched)
-                            out_lines.append("data: " + json.dumps(patched, ensure_ascii=False))
-                        except Exception:
-                            patched_str = raw
-                            for src, dst in replacements.items():
-                                if src is None or dst is None:
-                                    continue
-                                patched_str = patched_str.replace(str(src), str(dst))
-                            out_lines.append("data: " + patched_str)
-                    else:
-                        patched = line
-                        for src, dst in replacements.items():
-                            if src is None or dst is None:
-                                continue
-                            patched = patched.replace(str(src), str(dst))
-                        out_lines.append(patched)
-                yield ("\n".join(out_lines) + "\n\n").encode("utf-8")
+            combined = tail + piece
 
-        if buffer:
-            lines = buffer.splitlines()
-            out_lines = []
-            for line in lines:
-                if line.startswith("data:"):
-                    raw = line[5:].lstrip()
-                    if raw.strip() == "[DONE]":
-                        out_lines.append("data: [DONE]")
-                        continue
-                    try:
-                        obj = json.loads(raw)
-                        patched = _apply_replacements_to_any(obj, replacements)
-                        out_lines.append("data: " + json.dumps(patched, ensure_ascii=False))
-                    except Exception:
-                        patched_str = raw
-                        for src, dst in replacements.items():
-                            if src is None or dst is None:
-                                continue
-                            patched_str = patched_str.replace(str(src), str(dst))
-                        out_lines.append("data: " + patched_str)
-                else:
-                    patched = line
-                    for src, dst in replacements.items():
-                        if src is None or dst is None:
-                            continue
-                        patched = patched.replace(str(src), str(dst))
-                    out_lines.append(patched)
-            yield ("\n".join(out_lines)).encode("utf-8")
+            if not replaced_open:
+                if combined.startswith(open_tag):
+                    combined = "<think>" + combined[len(open_tag):]
+                    replaced_open = True
+                elif open_tag in combined:
+                    combined = combined.replace(open_tag, "<think>", 1)
+                    replaced_open = True
+
+            if replaced_open and not replaced_close and close_tag in combined:
+                combined = combined.replace(close_tag, "</think>", 1)
+                replaced_close = True
+
+            if tail_len > 0 and len(combined) > tail_len:
+                emit, tail = combined[:-tail_len], combined[-tail_len:]
+            else:
+                emit, tail = "", combined
+            if emit:
+                yield emit.encode("utf-8")
+
+        if tail:
+            if not replaced_open:
+                if tail.startswith(open_tag):
+                    tail = "<think>" + tail[len(open_tag):]
+                    replaced_open = True
+                elif open_tag in tail:
+                    tail = tail.replace(open_tag, "<think>", 1)
+                    replaced_open = True
+            if replaced_open and not replaced_close and close_tag in tail:
+                tail = tail.replace(close_tag, "</think>", 1)
+                replaced_close = True
+            yield tail.encode("utf-8")
     except httpx.StreamClosed:
-        logger.warning("上游流已关闭，提前结束推送")
+        logger.warning("?????????????")
     except Exception:
-        logger.exception("转发流式响应时发生异常")
+        logger.exception("???????????")
         raise
 
 

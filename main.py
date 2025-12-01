@@ -95,21 +95,29 @@ def _build_upstream_headers() -> Dict[str, str]:
 
 def _apply_replacements_to_messages(messages: Any, replacements: Dict[str, str]):
     """对消息列表中的 content 逐条做字符串替换。"""
-    if not replacements or not isinstance(messages, list):
-        return messages
+    return _apply_replacements_to_any(messages, replacements)
 
-    patched_messages = []
-    for msg in messages:
-        if isinstance(msg, dict) and isinstance(msg.get("content"), str):
-            text_val = msg["content"]
-            for src, dst in replacements.items():
-                if src is None or dst is None:
-                    continue
-                text_val = text_val.replace(str(src), str(dst))
-            patched_messages.append({**msg, "content": text_val})
-        else:
-            patched_messages.append(msg)
-    return patched_messages
+
+def _apply_replacements_to_any(payload: Any, replacements: Dict[str, str]):
+    """在任意结构中替换字符串，兼容请求与响应。"""
+    if not replacements:
+        return payload
+
+    def replace_text(text: str) -> str:
+        patched = text
+        for src, dst in replacements.items():
+            if src is None or dst is None:
+                continue
+            patched = patched.replace(str(src), str(dst))
+        return patched
+
+    if isinstance(payload, str):
+        return replace_text(payload)
+    if isinstance(payload, list):
+        return [_apply_replacements_to_any(item, replacements) for item in payload]
+    if isinstance(payload, dict):
+        return {k: _apply_replacements_to_any(v, replacements) for k, v in payload.items()}
+    return payload
 
 
 async def verify_proxy_key(
@@ -175,6 +183,7 @@ def apply_overrides(payload: Dict[str, Any], overrides: Dict[str, OverrideRule])
     if rule.replacements:
         messages = patched.get("messages")
         patched["messages"] = _apply_replacements_to_messages(messages, rule.replacements)
+        logger.info("请求替换已应用，模型=%s，规则数=%s", model, len(rule.replacements))
 
     return patched
 
@@ -250,6 +259,12 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     body = await request.json()
     patched_body = apply_overrides(body, request.app.state.override_map)
     is_stream = bool(patched_body.get("stream"))
+    incoming_model = body.get("model")
+    rule = request.app.state.override_map.get(incoming_model) or request.app.state.override_map.get(
+        patched_body.get("model")
+    )
+    if incoming_model != patched_body.get("model"):
+        logger.info("模型覆写: %s -> %s", incoming_model, patched_body.get("model"))
 
     client: httpx.AsyncClient = request.app.state.http_client
     url = f"{NEWAPI_BASE_URL}/v1/chat/completions"
@@ -275,6 +290,9 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
         raise HTTPException(status_code=resp.status_code, detail=_extract_error(resp))
 
     payload = _extract_payload(resp)
+    if rule and rule.replacements:
+        payload = _apply_replacements_to_any(payload, rule.replacements)
+        logger.info("响应替换已应用，模型=%s，规则数=%s", incoming_model, len(rule.replacements))
     media_type = resp.headers.get("content-type", "application/json")
     if isinstance(payload, (dict, list)):
         return JSONResponse(content=payload, status_code=resp.status_code, media_type=media_type)

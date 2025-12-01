@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>newapi OpenAI 代理 WebUI</title>
+  <title>newapi OpenAI 代理覆写器</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
@@ -54,25 +54,11 @@
       flex-direction: column;
       gap: 12px;
     }
-    .login-card h2 {
-      margin: 0;
-      font-weight: 600;
-      color: var(--text);
-    }
-    .login-desc {
-      margin: 0;
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.5;
-    }
-    .login-actions {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
+    .login-card h2 { margin: 0; font-weight: 600; color: var(--text); }
+    .login-desc { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+    .login-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
     .shell {
-      width: min(1100px, 100%);
+      width: min(1180px, 100%);
       background: linear-gradient(135deg, rgba(22, 27, 34, 0.9), rgba(22, 27, 34, 0.7));
       border: 1px solid var(--border);
       border-radius: 16px;
@@ -80,146 +66,39 @@
       backdrop-filter: blur(8px);
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
     }
-    header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 16px;
-    }
-    .title {
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      color: var(--text);
-    }
-    .pill {
-      padding: 4px 10px;
-      border-radius: 12px;
-      background: rgba(0, 194, 255, 0.12);
-      border: 1px solid rgba(0, 194, 255, 0.3);
-      color: var(--accent);
-      font-size: 12px;
-    }
-    .row {
-      display: grid;
-      gap: 12px;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      margin-bottom: 12px;
-    }
-    label {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      font-size: 14px;
-      color: var(--muted);
-    }
-    input, textarea, select {
-      width: 100%;
-      padding: 10px 12px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      background: #0c1017;
-      color: var(--text);
-      outline: none;
-      font-size: 14px;
-      transition: border-color 0.2s ease, box-shadow 0.2s ease;
-    }
-    input:focus, textarea:focus, select:focus {
-      border-color: rgba(0, 194, 255, 0.6);
-      box-shadow: 0 0 0 3px rgba(0, 194, 255, 0.12);
-    }
-    textarea {
-      min-height: 80px;
-      resize: vertical;
-      line-height: 1.5;
-    }
-    button {
-      cursor: pointer;
-      border: none;
-      border-radius: 12px;
-      padding: 12px 16px;
-      font-weight: 600;
-      color: #0b0f16;
-      background: linear-gradient(135deg, var(--accent), var(--accent-2));
-      transition: transform 0.1s ease, box-shadow 0.2s ease;
-      box-shadow: 0 10px 35px rgba(0, 194, 255, 0.25);
-    }
-    button.secondary {
-      background: transparent;
-      color: var(--text);
-      border: 1px solid var(--border);
-      box-shadow: none;
-    }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+    .title { font-weight: 600; letter-spacing: 0.5px; display: flex; gap: 10px; align-items: center; color: var(--text); }
+    .pill { padding: 4px 10px; border-radius: 12px; background: rgba(0, 194, 255, 0.12); border: 1px solid rgba(0, 194, 255, 0.3); color: var(--accent); font-size: 12px; }
+    .layout { display: grid; grid-template-columns: 280px 1fr; gap: 12px; }
+    .panel { background: rgba(12, 16, 23, 0.75); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
+    .side-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+    .models { display: flex; flex-direction: column; gap: 8px; max-height: 560px; overflow: auto; }
+    .model-item { width: 100%; text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: rgba(255,255,255,0.02); color: var(--text); font-size: 14px; cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
+    .model-item:hover { border-color: rgba(0, 194, 255, 0.4); }
+    .model-item.active { border-color: rgba(0, 194, 255, 0.6); background: rgba(0, 194, 255, 0.08); }
+    .row { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-bottom: 12px; }
+    label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
+    input, textarea, select { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: #0c1017; color: var(--text); outline: none; font-size: 14px; transition: border-color 0.2s ease, box-shadow 0.2s ease; }
+    input:focus, textarea:focus, select:focus { border-color: rgba(0, 194, 255, 0.6); box-shadow: 0 0 0 3px rgba(0, 194, 255, 0.12); }
+    textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
+    button { cursor: pointer; border: none; border-radius: 12px; padding: 12px 16px; font-weight: 600; color: #0b0f16; background: linear-gradient(135deg, var(--accent), var(--accent-2)); transition: transform 0.1s ease, box-shadow 0.2s ease; box-shadow: 0 10px 35px rgba(0, 194, 255, 0.25); }
+    button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); box-shadow: none; }
     button:hover { transform: translateY(-1px); }
     button:active { transform: translateY(0); }
-    .actions {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      margin-bottom: 12px;
-    }
-    .chat-box {
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: rgba(12, 16, 23, 0.85);
-      padding: 14px;
-      min-height: 320px;
-      max-height: 560px;
-      overflow: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .msg {
-      padding: 12px 14px;
-      border-radius: 12px;
-      line-height: 1.6;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .msg.user {
-      background: rgba(0, 194, 255, 0.08);
-      border: 1px solid rgba(0, 194, 255, 0.2);
-    }
-    .msg.assistant {
-      background: rgba(157, 107, 255, 0.08);
-      border: 1px solid rgba(157, 107, 255, 0.25);
-    }
-    .msg.system {
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px dashed rgba(255, 255, 255, 0.15);
-    }
-    .note {
-      font-size: 13px;
-      color: var(--muted);
-      margin-bottom: 8px;
-    }
-    .models {
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 10px;
-      background: rgba(255, 255, 255, 0.02);
-      max-height: 180px;
-      overflow: auto;
-      font-size: 13px;
-      line-height: 1.5;
-    }
-    .status {
-      color: var(--muted);
-      font-size: 13px;
-      margin-top: 6px;
-      min-height: 18px;
-    }
+    .note { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+    .status { color: var(--muted); font-size: 13px; margin-top: 6px; min-height: 18px; }
+    .log-box { margin-top: 10px; background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 10px; padding: 10px; min-height: 160px; max-height: 240px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace; font-size: 12px; color: var(--text); }
+    .modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; z-index: 20; }
+    .modal-content { width: min(620px, 100%); background: rgba(22, 27, 34, 0.95); border: 1px solid var(--border); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.45); }
+    .modal-title { font-weight: 600; margin: 0; color: var(--text); }
+    .small { font-size: 12px; }
   </style>
 </head>
 <body>
   <div class="login-screen" id="loginScreen">
     <div class="login-card">
       <h2>登录 newapi 代理</h2>
-      <p class="login-desc">请输入代理地址与 API Key，登录后写入变量并解锁 WebUI。</p>
+      <p class="login-desc">请输入代理地址与 API Key，登录后解锁覆写管理界面。</p>
       <label>
         代理地址（含端口）
         <input id="loginEndpoint" placeholder="http://localhost:14300" />
@@ -229,7 +108,7 @@
         <input id="loginKey" placeholder="如果未设置可留空" />
       </label>
       <div class="login-actions">
-        <button id="loginBtn">进入 WebUI</button>
+        <button id="loginBtn">进入覆写器</button>
       </div>
     </div>
   </div>
@@ -237,8 +116,8 @@
   <div class="shell hidden" id="appShell">
     <header>
       <div class="title">
-        <span style="font-size:20px;">newapi 代理 WebUI</span>
-        <span class="pill">默认端口 14300</span>
+        <span style="font-size:20px;">newapi 覆写器</span>
+        <span class="pill">仅转发与内容覆写，不带聊天功能</span>
       </div>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         <button class="secondary" id="logoutBtn">重新登录</button>
@@ -246,42 +125,76 @@
       </div>
     </header>
 
-    <div class="row">
-      <label>
-        代理地址（含端口）
-        <input id="endpoint" placeholder="http://localhost:14300" />
-      </label>
-      <label>
-        代理 API Key（PROXY_API_KEY）
-        <input id="proxyKey" placeholder="如果未设置可留空" />
-      </label>
-      <label>
-        模型 ID
-        <input id="model" placeholder="gpt-4o 或自定义别名" value="gpt-4o" />
-      </label>
-      <label>
-        系统提示（可选，发送时插到最前面）
-        <input id="systemPrompt" placeholder="例如：请始终用中文回答" />
-      </label>
-    </div>
+    <div class="layout">
+      <aside class="panel">
+        <div class="side-header">
+          <span style="color:var(--text); font-weight:600;">模型列表</span>
+          <button class="secondary" style="padding:8px 10px;" id="refreshModelsBtn">刷新</button>
+        </div>
+        <div class="note small">点击模型打开独立覆写设置（系统提示 / 返回替换）。</div>
+        <div class="models" id="modelsBox">尚未拉取模型</div>
+      </aside>
 
-    <div class="actions">
-      <button id="sendBtn">发送消息</button>
-      <button class="secondary" id="clearBtn">清空对话</button>
-    </div>
-    <div class="note">提示：消息会在前端维护上下文，点击“清空对话”可重置。</div>
+      <main class="panel">
+        <div class="row" style="margin-bottom:8px;">
+          <label>
+            当前模型
+            <input id="model" placeholder="点击左侧模型以选择" readonly />
+          </label>
+          <label>
+            代理地址（含端口，右上可重新登录）
+            <input id="endpoint" placeholder="http://localhost:14300" />
+          </label>
+          <label>
+            代理 API Key（PROXY_API_KEY）
+            <input id="proxyKey" placeholder="如果未设置可留空" />
+          </label>
+        </div>
+        <div class="note" id="currentSettingsLine">未选择模型。</div>
 
-    <div class="chat-box" id="chatBox"></div>
-    <div class="row" style="margin-top:12px;">
+        <div class="note">此页面只提供覆写配置与日志，不会发起聊天请求。请求/响应覆写请在模型设置中配置。</div>
+
+        <div style="display:grid; grid-template-columns: 1fr; gap:8px; margin-top:10px;">
+          <label>
+            本地覆写配置预览（可复制到服务端环境变量 MODEL_OVERRIDE_MAP）
+            <textarea id="configPreview" readonly style="min-height:140px; font-family:ui-monospace,Consolas,'Courier New',monospace;"></textarea>
+          </label>
+        </div>
+
+        <div class="note">实时日志</div>
+        <div class="log-box" id="logBox"></div>
+        <div class="status" id="statusLine"></div>
+      </main>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="settingsModal">
+    <div class="modal-content">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+        <h3 class="modal-title">模型覆写设置</h3>
+        <button class="secondary" id="closeSettingsBtn" style="padding:8px 10px;">关闭</button>
+      </div>
       <label>
-        输入消息
-        <textarea id="userInput" placeholder="输入要发送给上游的用户消息"></textarea>
+        模型 ID（只读）
+        <input id="settingsModelId" readonly />
       </label>
+      <label>
+        系统提示词（请求时自动插入到最前）
+        <textarea id="settingsSystemPrompt" placeholder="例如：请始终用中文回答"></textarea>
+      </label>
+      <label>
+        请求内容查找替换（对上游前的 messages.content，行内：原文 => 新文）
+        <textarea id="settingsRequestRepl" placeholder="例如：\n敏感词 => 友好词\nbad => good"></textarea>
+      </label>
+      <label>
+        响应内容查找替换（对上游返回的文本，行内：原文 => 新文）
+        <textarea id="settingsResponseRepl" placeholder="例如：\n内部词 => 外显词\nfoo => bar"></textarea>
+      </label>
+      <div class="login-actions">
+        <button id="saveSettingsBtn">保存设置</button>
+      </div>
+      <div class="note small">请求替换会作用于 messages.content；响应替换会作用于返回 JSON 中的字符串字段。</div>
     </div>
-
-    <div class="note">上游模型列表（代理追加别名）：</div>
-    <div class="models" id="modelsBox">尚未拉取模型</div>
-    <div class="status" id="statusLine"></div>
   </div>
 
   <script>
@@ -291,43 +204,91 @@
     const loginKeyInput = document.getElementById('loginKey');
     const loginBtn = document.getElementById('loginBtn');
     const logoutBtn = document.getElementById('logoutBtn');
-    const chatBox = document.getElementById('chatBox');
-    const statusLine = document.getElementById('statusLine');
     const modelsBox = document.getElementById('modelsBox');
     const endpointInput = document.getElementById('endpoint');
     const proxyKeyInput = document.getElementById('proxyKey');
     const modelInput = document.getElementById('model');
-    const systemPromptInput = document.getElementById('systemPrompt');
-    const userInput = document.getElementById('userInput');
+    const currentSettingsLine = document.getElementById('currentSettingsLine');
+    const settingsModal = document.getElementById('settingsModal');
+    const settingsModelId = document.getElementById('settingsModelId');
+    const settingsSystemPrompt = document.getElementById('settingsSystemPrompt');
+    const settingsRequestRepl = document.getElementById('settingsRequestRepl');
+    const settingsResponseRepl = document.getElementById('settingsResponseRepl');
+    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+    const closeSettingsBtn = document.getElementById('closeSettingsBtn');
+    const refreshModelsBtn = document.getElementById('refreshModelsBtn');
+    const getModelsBtn = document.getElementById('getModelsBtn');
+    const logBox = document.getElementById('logBox');
+    const statusLine = document.getElementById('statusLine');
+    const configPreview = document.getElementById('configPreview');
 
     const defaultOrigin = window.location.origin.includes('http') ? window.location.origin : 'http://localhost:14300';
 
-    let conversation = [];
+    let modelsCache = [];
+    let modelSettings = {};
+
+    function log(msg) {
+      const now = new Date().toLocaleTimeString();
+      const line = `[${now}] ${msg}`;
+      const div = document.createElement('div');
+      div.textContent = line;
+      logBox.appendChild(div);
+      logBox.scrollTop = logBox.scrollHeight;
+    }
 
     function setStatus(text) {
       statusLine.textContent = text || '';
+      if (text) log(text);
     }
 
-    function appendMessage(role, content) {
-      const div = document.createElement('div');
-      div.className = `msg ${role}`;
-      div.textContent = `${role.toUpperCase()}: ${content}`;
-      chatBox.appendChild(div);
-      chatBox.scrollTop = chatBox.scrollHeight;
+    function parsePairs(raw) {
+      const lines = (raw || '').split('\n');
+      const pairs = [];
+      for (const line of lines) {
+        const parts = line.split('=>');
+        if (parts.length >= 2) {
+          const src = parts[0].trim();
+          const dst = parts.slice(1).join('=>').trim();
+          if (src) pairs.push([src, dst]);
+        }
+      }
+      return pairs;
+    }
+
+    function pairsToObject(pairs) {
+      const obj = {};
+      pairs.forEach(([src, dst]) => {
+        if (src) obj[src] = dst ?? '';
+      });
+      return obj;
+    }
+
+    function renderModelList(list) {
+      if (!Array.isArray(list) || !list.length) {
+        modelsBox.textContent = '未获取到模型';
+        return;
+      }
+      modelsBox.innerHTML = '';
+      list.forEach(item => {
+        const btn = document.createElement('button');
+        btn.className = 'model-item' + (item.id === modelInput.value ? ' active' : '');
+        const alias = item.alias_for ? ` → ${item.alias_for}` : '';
+        btn.textContent = `${item.id}${alias}`;
+        btn.onclick = () => openSettings(item.id);
+        modelsBox.appendChild(btn);
+      });
     }
 
     async function fetchModels() {
       const endpoint = endpointInput.value.trim() || defaultOrigin;
       setStatus('正在拉取模型列表...');
       try {
-        const resp = await fetch(`${endpoint}/v1/models`, {
-          headers: buildHeaders()
-        });
+        const resp = await fetch(`${endpoint}/v1/models`, { headers: buildHeaders() });
         const data = await resp.json();
         if (!resp.ok) throw new Error(JSON.stringify(data));
-        const rows = (data.data || []).map(item => `${item.id}${item.alias_for ? ' → ' + item.alias_for : ''}`);
-        modelsBox.textContent = rows.length ? rows.join('\n') : '未获取到模型';
-        setStatus('模型列表已更新');
+        modelsCache = data.data || [];
+        renderModelList(modelsCache);
+        setStatus('模型列表已更新，点击模型可进入覆写设置');
       } catch (err) {
         modelsBox.textContent = '获取失败';
         setStatus(`拉取模型失败：${err}`);
@@ -339,52 +300,6 @@
       const key = proxyKeyInput.value.trim();
       if (key) headers['Authorization'] = `Bearer ${key}`;
       return headers;
-    }
-
-    async function sendMessage() {
-      const endpoint = endpointInput.value.trim() || defaultOrigin;
-      const model = modelInput.value.trim();
-      const text = userInput.value.trim();
-      const systemPrompt = systemPromptInput.value.trim();
-      if (!text) return setStatus('请输入用户消息');
-      if (!model) return setStatus('请输入模型 ID');
-
-      if (systemPrompt && !conversation.find(m => m.role === 'system')) {
-        conversation.unshift({ role: 'system', content: systemPrompt });
-        appendMessage('system', systemPrompt);
-      }
-
-      conversation.push({ role: 'user', content: text });
-      appendMessage('user', text);
-      userInput.value = '';
-      setStatus('等待上游响应...');
-
-      try {
-        const resp = await fetch(`${endpoint}/v1/chat/completions`, {
-          method: 'POST',
-          headers: buildHeaders(),
-          body: JSON.stringify({
-            model,
-            messages: conversation,
-            stream: false
-          })
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
-        const msg = data.choices?.[0]?.message?.content || '[空响应]';
-        conversation.push({ role: 'assistant', content: msg });
-        appendMessage('assistant', msg);
-        setStatus('完成');
-      } catch (err) {
-        appendMessage('assistant', `调用失败：${err}`);
-        setStatus('调用失败，请检查地址/API Key/模型配置');
-      }
-    }
-
-    function clearChat() {
-      conversation = [];
-      chatBox.innerHTML = '';
-      setStatus('已清空对话');
     }
 
     function applyCredentials(endpoint, key) {
@@ -403,21 +318,23 @@
       localStorage.setItem('proxy_key', key);
       loginScreen.classList.add('hidden');
       shell.classList.remove('hidden');
-      setStatus('已登录，可开始调用');
+      setStatus('已登录，可管理覆写规则');
     }
 
     function showLogin() {
       shell.classList.add('hidden');
       loginScreen.classList.remove('hidden');
-      conversation = [];
-      chatBox.innerHTML = '';
-      setStatus('');
+      setStatus('已返回登录');
     }
 
     function hydrateFromStorage() {
       const savedEndpoint = localStorage.getItem('proxy_endpoint');
       const savedKey = localStorage.getItem('proxy_key');
+      const savedSettings = localStorage.getItem('model_settings');
       applyCredentials(savedEndpoint || defaultOrigin, savedKey || '');
+      if (savedSettings) {
+        try { modelSettings = JSON.parse(savedSettings) || {}; } catch { modelSettings = {}; }
+      }
       if (savedEndpoint || savedKey) {
         loginScreen.classList.add('hidden');
         shell.classList.remove('hidden');
@@ -425,13 +342,76 @@
       } else {
         showLogin();
       }
+      renderConfigPreview();
     }
 
-    document.getElementById('getModelsBtn').onclick = fetchModels;
-    document.getElementById('sendBtn').onclick = sendMessage;
-    document.getElementById('clearBtn').onclick = clearChat;
+    function openSettings(modelId) {
+      modelInput.value = modelId;
+      const cfg = modelSettings[modelId] || {};
+      settingsModelId.value = modelId;
+      settingsSystemPrompt.value = cfg.systemPrompt || '';
+      settingsRequestRepl.value = cfg.requestText || '';
+      settingsResponseRepl.value = cfg.responseText || '';
+      settingsModal.classList.remove('hidden');
+      updateSettingsLine();
+      setStatus(`已切换到模型 ${modelId}，可编辑覆写设置`);
+    }
+
+    function updateSettingsLine() {
+      const model = modelInput.value.trim();
+      if (!model) {
+        currentSettingsLine.textContent = '未选择模型。';
+        return;
+      }
+      const cfg = modelSettings[model] || {};
+      const promptInfo = cfg.systemPrompt ? '已设系统提示' : '系统提示未设';
+      const reqInfo = cfg.requestPairs && cfg.requestPairs.length ? `请求替换：${cfg.requestPairs.length} 条` : '请求替换未设';
+      const respInfo = cfg.responsePairs && cfg.responsePairs.length ? `响应替换：${cfg.responsePairs.length} 条` : '响应替换未设';
+      currentSettingsLine.textContent = `当前模型：${model} ｜ ${promptInfo} ｜ ${reqInfo} ｜ ${respInfo}。`;
+    }
+
+    function renderConfigPreview() {
+      const cfg = {};
+      Object.entries(modelSettings).forEach(([id, item]) => {
+        cfg[id] = {
+          target_model: item.targetModel || id,
+          prepend_system: item.systemPrompt || undefined,
+          force_params: item.forceParams || undefined,
+          replace: item.requestPairs && item.requestPairs.length ? pairsToObject(item.requestPairs) : undefined,
+          replacements: item.responsePairs && item.responsePairs.length ? pairsToObject(item.responsePairs) : undefined
+        };
+      });
+      configPreview.value = JSON.stringify(cfg, null, 2);
+    }
+
+    function saveSettings() {
+      const modelId = settingsModelId.value.trim();
+      if (!modelId) return;
+      const systemPrompt = settingsSystemPrompt.value.trim();
+      const requestText = settingsRequestRepl.value;
+      const responseText = settingsResponseRepl.value;
+      const requestPairs = parsePairs(requestText);
+      const responsePairs = parsePairs(responseText);
+      modelSettings[modelId] = {
+        systemPrompt,
+        requestText,
+        responseText,
+        requestPairs,
+        responsePairs
+      };
+      localStorage.setItem('model_settings', JSON.stringify(modelSettings));
+      settingsModal.classList.add('hidden');
+      updateSettingsLine();
+      renderConfigPreview();
+      setStatus(`已保存模型 ${modelId} 的覆写设置`);
+    }
+
     loginBtn.onclick = enterApp;
     logoutBtn.onclick = showLogin;
+    getModelsBtn.onclick = fetchModels;
+    refreshModelsBtn.onclick = fetchModels;
+    closeSettingsBtn.onclick = () => settingsModal.classList.add('hidden');
+    saveSettingsBtn.onclick = saveSettings;
 
     hydrateFromStorage();
   </script>

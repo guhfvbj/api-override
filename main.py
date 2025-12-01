@@ -156,36 +156,49 @@ def _build_upstream_headers() -> Dict[str, str]:
 
 async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dict[str, str]] = None):
     """按 SSE data 行解析并可选进行字符串替换，兼容 StreamClosed。"""
+    # 没有替换规则时，直接透传二进制流
+    if not replacements:
+        try:
+            async for chunk in upstream_resp.aiter_raw():
+                yield chunk
+        except httpx.StreamClosed:
+            logger.warning("上游流已关闭，提前结束推送")
+        except Exception:
+            logger.exception("转发流式响应时发生异常")
+            raise
+        return
+
+    buffer = ""
     try:
-        async for chunk in upstream_resp.aiter_raw():
-            if not replacements:
-                yield chunk
-                continue
-
-            try:
-                text = chunk.decode("utf-8", errors="ignore")
-            except Exception:
-                yield chunk
-                continue
-
-            out_lines = []
-            lines = text.splitlines()
-            for line in lines:
+        async for piece in upstream_resp.aiter_text():
+            buffer += piece
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
                 if line.startswith("data:"):
                     data_part = line[5:].lstrip()
                     try:
                         obj = json.loads(data_part)
                         patched = _apply_replacements_to_any(obj, replacements)
-                        out_lines.append("data: " + json.dumps(patched, ensure_ascii=False))
+                        out_line = "data: " + json.dumps(patched, ensure_ascii=False)
                     except Exception:
-                        out_lines.append(line)
+                        out_line = line
                 else:
-                    out_lines.append(line)
-
-            new_text = "\n".join(out_lines)
-            if text.endswith("\n"):
-                new_text += "\n"
-            yield new_text.encode("utf-8")
+                    out_line = line
+                yield (out_line + "\n").encode("utf-8")
+        # 处理最后残留的一行
+        if buffer:
+            line = buffer
+            if line.startswith("data:"):
+                data_part = line[5:].lstrip()
+                try:
+                    obj = json.loads(data_part)
+                    patched = _apply_replacements_to_any(obj, replacements)
+                    out_line = "data: " + json.dumps(patched, ensure_ascii=False)
+                except Exception:
+                    out_line = line
+            else:
+                out_line = line
+            yield out_line.encode("utf-8")
     except httpx.StreamClosed:
         logger.warning("上游流已关闭，提前结束推送")
     except Exception:

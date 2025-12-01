@@ -155,7 +155,7 @@ def _build_upstream_headers() -> Dict[str, str]:
 
 
 async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dict[str, str]] = None):
-    """按 SSE data 行解析并覆写 JSON 字段（含 text），兼容 StreamClosed。"""
+    """按 SSE 事件缓冲解析并覆写 JSON 字段（含 text），兼容 StreamClosed。"""
     if not replacements:
         try:
             async for chunk in upstream_resp.aiter_raw():
@@ -167,34 +167,77 @@ async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dic
             raise
         return
 
+    buffer = ""
     try:
-        async for line in upstream_resp.aiter_lines():
-            if line.startswith("data:"):
-                raw = line[5:].lstrip()
-                if raw.strip() == "[DONE]":
-                    yield (line + "\n").encode("utf-8")
-                    continue
+        async for piece in upstream_resp.aiter_text():
+            buffer += piece
+            while True:
+                sep_pos = buffer.find("\n\n")
+                sep_len = 2
+                if sep_pos == -1:
+                    sep_pos = buffer.find("\r\n\r\n")
+                    if sep_pos != -1:
+                        sep_len = 4
+                if sep_pos == -1:
+                    break
 
-                try:
-                    obj = json.loads(raw)
-                    patched = _apply_replacements_to_any(obj, replacements)
-                    out = "data: " + json.dumps(patched, ensure_ascii=False)
-                except Exception:
-                    patched_str = raw
+                event, buffer = buffer[:sep_pos], buffer[sep_pos + sep_len :]
+                lines = event.splitlines()
+                out_lines = []
+                for line in lines:
+                    if line.startswith("data:"):
+                        raw = line[5:].lstrip()
+                        if raw.strip() == "[DONE]":
+                            out_lines.append("data: [DONE]")
+                            continue
+                        try:
+                            obj = json.loads(raw)
+                            patched = _apply_replacements_to_any(obj, replacements)
+                            out_lines.append("data: " + json.dumps(patched, ensure_ascii=False))
+                        except Exception:
+                            patched_str = raw
+                            for src, dst in replacements.items():
+                                if src is None or dst is None:
+                                    continue
+                                patched_str = patched_str.replace(str(src), str(dst))
+                            out_lines.append("data: " + patched_str)
+                    else:
+                        patched = line
+                        for src, dst in replacements.items():
+                            if src is None or dst is None:
+                                continue
+                            patched = patched.replace(str(src), str(dst))
+                        out_lines.append(patched)
+                yield ("\n".join(out_lines) + "\n\n").encode("utf-8")
+
+        if buffer:
+            lines = buffer.splitlines()
+            out_lines = []
+            for line in lines:
+                if line.startswith("data:"):
+                    raw = line[5:].lstrip()
+                    if raw.strip() == "[DONE]":
+                        out_lines.append("data: [DONE]")
+                        continue
+                    try:
+                        obj = json.loads(raw)
+                        patched = _apply_replacements_to_any(obj, replacements)
+                        out_lines.append("data: " + json.dumps(patched, ensure_ascii=False))
+                    except Exception:
+                        patched_str = raw
+                        for src, dst in replacements.items():
+                            if src is None or dst is None:
+                                continue
+                            patched_str = patched_str.replace(str(src), str(dst))
+                        out_lines.append("data: " + patched_str)
+                else:
+                    patched = line
                     for src, dst in replacements.items():
                         if src is None or dst is None:
                             continue
-                        patched_str = patched_str.replace(str(src), str(dst))
-                    out = "data: " + patched_str
-
-                yield (out + "\n").encode("utf-8")
-            else:
-                patched = line
-                for src, dst in replacements.items():
-                    if src is None or dst is None:
-                        continue
-                    patched = patched.replace(str(src), str(dst))
-                yield (patched + "\n").encode("utf-8")
+                        patched = patched.replace(str(src), str(dst))
+                    out_lines.append(patched)
+            yield ("\n".join(out_lines)).encode("utf-8")
     except httpx.StreamClosed:
         logger.warning("上游流已关闭，提前结束推送")
     except Exception:

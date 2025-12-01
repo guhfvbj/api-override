@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>newapi OpenAI 代理 WebUI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0e1117;
+      --panel: #161b22;
+      --accent: #00c2ff;
+      --accent-2: #9d6bff;
+      --text: #e6edf3;
+      --muted: #9ca3af;
+      --border: #242a32;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Space Grotesk', 'Inter', system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at 10% 20%, rgba(0, 194, 255, 0.12), transparent 35%),
+                  radial-gradient(circle at 80% 0%, rgba(157, 107, 255, 0.18), transparent 35%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 32px 16px 24px;
+      display: flex;
+      justify-content: center;
+    }
+    .shell {
+      width: min(1100px, 100%);
+      background: linear-gradient(135deg, rgba(22, 27, 34, 0.9), rgba(22, 27, 34, 0.7));
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 20px 20px 24px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .title {
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      color: var(--text);
+    }
+    .pill {
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: rgba(0, 194, 255, 0.12);
+      border: 1px solid rgba(0, 194, 255, 0.3);
+      color: var(--accent);
+      font-size: 12px;
+    }
+    .row {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      margin-bottom: 12px;
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    input, textarea, select {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #0c1017;
+      color: var(--text);
+      outline: none;
+      font-size: 14px;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: rgba(0, 194, 255, 0.6);
+      box-shadow: 0 0 0 3px rgba(0, 194, 255, 0.12);
+    }
+    textarea {
+      min-height: 80px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+    button {
+      cursor: pointer;
+      border: none;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-weight: 600;
+      color: #0b0f16;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      transition: transform 0.1s ease, box-shadow 0.2s ease;
+      box-shadow: 0 10px 35px rgba(0, 194, 255, 0.25);
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+      box-shadow: none;
+    }
+    button:hover { transform: translateY(-1px); }
+    button:active { transform: translateY(0); }
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .chat-box {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(12, 16, 23, 0.85);
+      padding: 14px;
+      min-height: 320px;
+      max-height: 560px;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .msg {
+      padding: 12px 14px;
+      border-radius: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .msg.user {
+      background: rgba(0, 194, 255, 0.08);
+      border: 1px solid rgba(0, 194, 255, 0.2);
+    }
+    .msg.assistant {
+      background: rgba(157, 107, 255, 0.08);
+      border: 1px solid rgba(157, 107, 255, 0.25);
+    }
+    .msg.system {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px dashed rgba(255, 255, 255, 0.15);
+    }
+    .note {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .models {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.02);
+      max-height: 180px;
+      overflow: auto;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .status {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 6px;
+      min-height: 18px;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="title">
+        <span style="font-size:20px;">newapi 代理 WebUI</span>
+        <span class="pill">默认端口 14300</span>
+      </div>
+      <button class="secondary" id="getModelsBtn">拉取模型</button>
+    </header>
+
+    <div class="row">
+      <label>
+        代理地址（含端口）
+        <input id="endpoint" placeholder="http://localhost:14300" />
+      </label>
+      <label>
+        代理 API Key（PROXY_API_KEY）
+        <input id="proxyKey" placeholder="如果未设置可留空" />
+      </label>
+      <label>
+        模型 ID
+        <input id="model" placeholder="gpt-4o 或自定义别名" value="gpt-4o" />
+      </label>
+      <label>
+        系统提示（可选，发送时插到最前面）
+        <input id="systemPrompt" placeholder="例如：请始终用中文回答" />
+      </label>
+    </div>
+
+    <div class="actions">
+      <button id="sendBtn">发送消息</button>
+      <button class="secondary" id="clearBtn">清空对话</button>
+    </div>
+    <div class="note">提示：消息会在前端维护上下文，点击“清空对话”可重置。</div>
+
+    <div class="chat-box" id="chatBox"></div>
+    <div class="row" style="margin-top:12px;">
+      <label>
+        输入消息
+        <textarea id="userInput" placeholder="输入要发送给上游的用户消息"></textarea>
+      </label>
+    </div>
+
+    <div class="note">上游模型列表（代理追加别名）：</div>
+    <div class="models" id="modelsBox">尚未拉取模型</div>
+    <div class="status" id="statusLine"></div>
+  </div>
+
+  <script>
+    const chatBox = document.getElementById('chatBox');
+    const statusLine = document.getElementById('statusLine');
+    const modelsBox = document.getElementById('modelsBox');
+    const endpointInput = document.getElementById('endpoint');
+    const proxyKeyInput = document.getElementById('proxyKey');
+    const modelInput = document.getElementById('model');
+    const systemPromptInput = document.getElementById('systemPrompt');
+    const userInput = document.getElementById('userInput');
+
+    const defaultOrigin = window.location.origin.includes('http') ? window.location.origin : 'http://localhost:14300';
+    endpointInput.value = defaultOrigin;
+
+    let conversation = [];
+
+    function setStatus(text) {
+      statusLine.textContent = text || '';
+    }
+
+    function appendMessage(role, content) {
+      const div = document.createElement('div');
+      div.className = `msg ${role}`;
+      div.textContent = `${role.toUpperCase()}: ${content}`;
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    async function fetchModels() {
+      const endpoint = endpointInput.value.trim() || defaultOrigin;
+      setStatus('正在拉取模型列表...');
+      try {
+        const resp = await fetch(`${endpoint}/v1/models`, {
+          headers: buildHeaders()
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(JSON.stringify(data));
+        const rows = (data.data || []).map(item => `${item.id}${item.alias_for ? ' → ' + item.alias_for : ''}`);
+        modelsBox.textContent = rows.length ? rows.join('\n') : '未获取到模型';
+        setStatus('模型列表已更新');
+      } catch (err) {
+        modelsBox.textContent = '获取失败';
+        setStatus(`拉取模型失败：${err}`);
+      }
+    }
+
+    function buildHeaders() {
+      const headers = { 'Content-Type': 'application/json' };
+      const key = proxyKeyInput.value.trim();
+      if (key) headers['Authorization'] = `Bearer ${key}`;
+      return headers;
+    }
+
+    async function sendMessage() {
+      const endpoint = endpointInput.value.trim() || defaultOrigin;
+      const model = modelInput.value.trim();
+      const text = userInput.value.trim();
+      const systemPrompt = systemPromptInput.value.trim();
+      if (!text) return setStatus('请输入用户消息');
+      if (!model) return setStatus('请输入模型 ID');
+
+      if (systemPrompt && !conversation.find(m => m.role === 'system')) {
+        conversation.unshift({ role: 'system', content: systemPrompt });
+        appendMessage('system', systemPrompt);
+      }
+
+      conversation.push({ role: 'user', content: text });
+      appendMessage('user', text);
+      userInput.value = '';
+      setStatus('等待上游响应...');
+
+      try {
+        const resp = await fetch(`${endpoint}/v1/chat/completions`, {
+          method: 'POST',
+          headers: buildHeaders(),
+          body: JSON.stringify({
+            model,
+            messages: conversation,
+            stream: false
+          })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
+        const msg = data.choices?.[0]?.message?.content || '[空响应]';
+        conversation.push({ role: 'assistant', content: msg });
+        appendMessage('assistant', msg);
+        setStatus('完成');
+      } catch (err) {
+        appendMessage('assistant', `调用失败：${err}`);
+        setStatus('调用失败，请检查地址/API Key/模型配置');
+      }
+    }
+
+    function clearChat() {
+      conversation = [];
+      chatBox.innerHTML = '';
+      setStatus('已清空对话');
+    }
+
+    document.getElementById('getModelsBtn').onclick = fetchModels;
+    document.getElementById('sendBtn').onclick = sendMessage;
+    document.getElementById('clearBtn').onclick = clearChat;
+  </script>
+</body>
+</html>

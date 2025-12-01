@@ -155,69 +155,110 @@ def _build_upstream_headers() -> Dict[str, str]:
 
 
 async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dict[str, str]] = None):
-    """????? <thinking>/<\/thinking>????????????? StreamClosed?"""
+    """在流式响应中安全处理 <thinking>...</thinking>，提高覆写成功率。
+
+    规则：
+    1. text 最终重组后应当以 `<thinking>` 开头（丢弃首个 `<thinking>` 之前的所有内容）。
+    2. 整个流只关心两个标签：`<thinking>` 和 `</thinking>`，其余内容原样透传。
+    3. 处理完 `</thinking>` 之后，后续内容全部原样透传（不再做任何替换）。
+
+    注意：这里仅对 `<thinking>` / `</thinking>` 做流式安全替换，其它 replacements 项只用于
+    非流式 JSON 模式下的 `_apply_replacements_to_any`。
+    """
     open_tag = "<thinking>"
     close_tag = "</thinking>"
-    replaced_open = False
-    replaced_close = False
-    tail_len = max(len(open_tag), len(close_tag)) - 1
-    tail = ""
 
-    # ?????????
+    # 如果没有任何覆写配置，直接透传原始字节流
     if not replacements:
         try:
             async for chunk in upstream_resp.aiter_raw():
                 yield chunk
         except httpx.StreamClosed:
-            logger.warning("?????????????")
+            logger.warning("上游流式连接已提前关闭")
         except Exception:
-            logger.exception("???????????")
+            logger.exception("转发上游流式响应时发生异常")
             raise
         return
 
+    # 仅针对 `<thinking>` / `</thinking>` 做特殊处理，其它 key 在流式场景忽略
+    open_repl = replacements.get(open_tag, open_tag)
+    close_repl = replacements.get(close_tag, close_tag)
+
+    seen_open = False
+    seen_close = False
+
+    # 为了正确识别可能被切分到 chunk 边界的标签，我们保留最多 tag_len-1 的尾部缓冲
+    max_tag_len = max(len(open_tag), len(close_tag))
+    buffer = ""
+
     try:
         async for piece in upstream_resp.aiter_text():
-            if replaced_open and replaced_close:
+            # 如果两个标签都已经处理完，后续内容直接透传
+            if seen_open and seen_close:
                 yield piece.encode("utf-8")
                 continue
 
-            combined = tail + piece
+            buffer += piece
 
-            if not replaced_open:
-                if combined.startswith(open_tag):
-                    combined = "<think>" + combined[len(open_tag):]
-                    replaced_open = True
-                elif open_tag in combined:
-                    combined = combined.replace(open_tag, "<think>", 1)
-                    replaced_open = True
+            while True:
+                # 1. 还没遇到 `<thinking>`：丢弃其之前的所有内容，只保留可能构成标签前缀的尾部
+                if not seen_open:
+                    idx = buffer.find(open_tag)
+                    if idx == -1:
+                        # 没找到完整标签，只保留尾部 max_tag_len-1，等待下一块拼接
+                        if len(buffer) > max_tag_len - 1:
+                            buffer = buffer[-(max_tag_len - 1) :]
+                        break
 
-            if replaced_open and not replaced_close and close_tag in combined:
-                combined = combined.replace(close_tag, "</think>", 1)
-                replaced_close = True
+                    # 丢弃 `<thinking>` 之前的内容，保证输出从 `<thinking>` 开始
+                    buffer = buffer[idx + len(open_tag) :]
+                    yield open_repl.encode("utf-8")
+                    seen_open = True
+                    # 继续 while 循环，看看当前 buffer 里是否已经包含 `</thinking>`
+                    continue
 
-            if tail_len > 0 and len(combined) > tail_len:
-                emit, tail = combined[:-tail_len], combined[-tail_len:]
-            else:
-                emit, tail = "", combined
-            if emit:
-                yield emit.encode("utf-8")
+                # 2. 已经遇到 `<thinking>` 但还没处理 `</thinking>`
+                if not seen_close:
+                    idx = buffer.find(close_tag)
+                    if idx == -1:
+                        # 还没有完整的 `</thinking>`，为了不拆断潜在标签，仅输出前面“安全部分”
+                        if len(buffer) > max_tag_len - 1:
+                            safe_len = len(buffer) - (max_tag_len - 1)
+                            emit, buffer = buffer[:safe_len], buffer[safe_len:]
+                            if emit:
+                                yield emit.encode("utf-8")
+                        break
 
-        if tail:
-            if not replaced_open:
-                if tail.startswith(open_tag):
-                    tail = "<think>" + tail[len(open_tag):]
-                    replaced_open = True
-                elif open_tag in tail:
-                    tail = tail.replace(open_tag, "<think>", 1)
-                    replaced_open = True
-            if replaced_open and not replaced_close and close_tag in tail:
-                tail = tail.replace(close_tag, "</think>", 1)
-                replaced_close = True
-            yield tail.encode("utf-8")
+                    # 输出 `</thinking>` 之前的内容
+                    before = buffer[:idx]
+                    if before:
+                        yield before.encode("utf-8")
+
+                    # 输出替换后的 `</thinking>`
+                    yield close_repl.encode("utf-8")
+                    seen_close = True
+
+                    # `</thinking>` 之后的内容在 buffer 中保留，下面统一透传
+                    buffer = buffer[idx + len(close_tag) :]
+
+                    if buffer:
+                        # 处理完第二个关注点（`</thinking>`）后，剩余内容原样透传
+                        yield buffer.encode("utf-8")
+                        buffer = ""
+                    break
+
+                # 理论上不会到这里（seen_open and seen_close 的情况在循环开头已处理）
+                break
+
+        # 流结束时还有残留 buffer：
+        # - 如果从未遇到 `<thinking>`，按照“尽量不丢数据”的原则透传剩余内容
+        # - 如果遇到 `<thinking>` 但没有 `</thinking>`，也直接透传剩余内容
+        if buffer and not (seen_open and seen_close):
+            yield buffer.encode("utf-8")
     except httpx.StreamClosed:
-        logger.warning("?????????????")
+        logger.warning("上游流式连接已提前关闭")
     except Exception:
-        logger.exception("???????????")
+        logger.exception("转发上游流式响应时发生异常")
         raise
 
 

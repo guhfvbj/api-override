@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-# Load .env for local dev
+# 加载 .env 环境变量
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
 DEFAULT_PORT = int(os.getenv("PORT", 14300))
 
-# Environment configs
+# 上游 newapi 相关配置
 NEWAPI_BASE_URL = os.getenv("NEWAPI_BASE_URL", "https://api.newapi.ai")
 NEWAPI_API_KEY = os.getenv("NEWAPI_API_KEY")
 PROXY_API_KEY = os.getenv("PROXY_API_KEY")
@@ -30,6 +30,8 @@ MODEL_OVERRIDE_MAP_RAW = os.getenv("MODEL_OVERRIDE_MAP", "{}")
 
 @dataclass
 class OverrideRule:
+    """模型覆盖规则，支持重定向模型、追加 system、强制参数、文本替换。"""
+
     target_model: Optional[str] = None
     prepend_system: Optional[str] = None
     force_params: Dict[str, Any] = field(default_factory=dict)
@@ -37,14 +39,15 @@ class OverrideRule:
 
 
 def _parse_override_map(raw: str) -> Dict[str, OverrideRule]:
+    """解析环境变量中的 JSON 字符串，构造成模型覆盖规则字典。"""
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        logger.warning("MODEL_OVERRIDE_MAP is not valid JSON, ignored: %s", raw)
+        logger.warning("MODEL_OVERRIDE_MAP 不是合法 JSON，已忽略：%s", raw)
         return {}
 
     if not isinstance(parsed, dict):
-        logger.warning("MODEL_OVERRIDE_MAP should be a dict, got: %s", parsed)
+        logger.warning("MODEL_OVERRIDE_MAP 应该是对象类型，当前值：%s", parsed)
         return {}
 
     result: Dict[str, OverrideRule] = {}
@@ -61,7 +64,7 @@ def _parse_override_map(raw: str) -> Dict[str, OverrideRule]:
                 replacements=cfg.get("replace") or cfg.get("replacements") or {},
             )
         else:
-            logger.warning("Ignore override item %s: %s", model_id, cfg)
+            logger.warning("不支持的模型覆盖配置 %s: %s", model_id, cfg)
     return result
 
 
@@ -69,6 +72,7 @@ override_map = _parse_override_map(MODEL_OVERRIDE_MAP_RAW)
 
 
 def _strip_trailing_slash(url: str) -> str:
+    """去掉末尾的斜杠，避免重复拼接路径。"""
     return url[:-1] if url.endswith("/") else url
 
 
@@ -76,11 +80,13 @@ NEWAPI_BASE_URL = _strip_trailing_slash(NEWAPI_BASE_URL)
 
 
 def _require_upstream_key() -> None:
+    """确保已配置上游 newapi 的鉴权 key。"""
     if not NEWAPI_API_KEY:
-        raise RuntimeError("Missing NEWAPI_API_KEY for upstream forwarding")
+        raise RuntimeError("未设置 NEWAPI_API_KEY，无法向上游鉴权")
 
 
 def _build_upstream_headers() -> Dict[str, str]:
+    """构造发往上游 newapi 的基础请求头。"""
     return {
         "Authorization": f"Bearer {NEWAPI_API_KEY}",
         "Content-Type": "application/json",
@@ -88,6 +94,7 @@ def _build_upstream_headers() -> Dict[str, str]:
 
 
 def _apply_replacements_to_messages(messages: Any, replacements: Dict[str, str]):
+    """对消息列表中的 content 逐条做字符串替换。"""
     if not replacements or not isinstance(messages, list):
         return messages
 
@@ -108,8 +115,9 @@ def _apply_replacements_to_messages(messages: Any, replacements: Dict[str, str])
 async def verify_proxy_key(
     authorization: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None)
 ) -> None:
+    """校验代理层的 API Key（支持 Authorization/X-Api-Key）。"""
     if not PROXY_API_KEY:
-        return  # allow if not set
+        return
     supplied: Optional[str] = None
     if authorization and authorization.lower().startswith("bearer "):
         supplied = authorization.split(" ", 1)[1]
@@ -117,29 +125,32 @@ async def verify_proxy_key(
         supplied = x_api_key
 
     if supplied != PROXY_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid proxy API Key")
+        raise HTTPException(status_code=401, detail="代理 API Key 不匹配")
 
 
 async def lifespan(app: FastAPI):
+    """启动/关闭生命周期：检测配置并创建共享 HTTP 客户端。"""
     _require_upstream_key()
     timeout = httpx.Timeout(60.0, connect=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         app.state.http_client = client
         app.state.override_map = override_map
-        logger.info("Proxy started, upstream: %s", NEWAPI_BASE_URL)
+        logger.info("上游 newapi 地址：%s", NEWAPI_BASE_URL)
         yield
-        logger.info("Proxy client closed")
+        logger.info("代理已停止，HTTP 客户端已关闭")
 
 
 app = FastAPI(title="newapi-openai-proxy", lifespan=lifespan)
 
+# 挂载静态目录以提供 Web UI
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 else:
-    logger.info("static directory not found, skip mount")
+    logger.info("未找到 static 目录，跳过 Web UI 挂载")
 
 
 def apply_overrides(payload: Dict[str, Any], overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
+    """根据 override 规则修改模型 ID、追加 system、强制参数与内容替换。"""
     if not isinstance(payload, dict):
         return payload
 
@@ -169,6 +180,7 @@ def apply_overrides(payload: Dict[str, Any], overrides: Dict[str, OverrideRule])
 
 
 def _augment_models_response(upstream_payload: Any, overrides: Dict[str, OverrideRule]) -> Any:
+    """在 /v1/models 返回值中追加代理定义的模型别名。"""
     if not isinstance(upstream_payload, dict):
         return upstream_payload
     data = upstream_payload.get("data")
@@ -192,6 +204,7 @@ def _augment_models_response(upstream_payload: Any, overrides: Dict[str, Overrid
 
 
 def _extract_error(resp: httpx.Response) -> Any:
+    """尽量提取上游错误消息的 JSON 内容。"""
     try:
         return resp.json()
     except Exception:
@@ -200,19 +213,22 @@ def _extract_error(resp: httpx.Response) -> Any:
 
 @app.get("/health")
 async def health() -> Dict[str, str]:
+    """健康检查。"""
     return {"status": "ok"}
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
+    """Web UI 首页。"""
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
         return FileResponse(index_file)
-    return HTMLResponse("<h2>newapi proxy</h2><p>static assets missing.</p>")
+    return HTMLResponse("<h2>newapi 代理</h2><p>未找到静态文件目录</p>")
 
 
 @app.get("/v1/models")
 async def list_models(_: None = Depends(verify_proxy_key), request: Request = None):
+    """代理转发 /v1/models 请求并追加本地别名。"""
     client: httpx.AsyncClient = request.app.state.http_client
     url = f"{NEWAPI_BASE_URL}/v1/models"
     resp = await client.get(url, headers=_build_upstream_headers())
@@ -221,6 +237,7 @@ async def list_models(_: None = Depends(verify_proxy_key), request: Request = No
 
 
 def _extract_payload(resp: httpx.Response) -> Any:
+    """尽量把响应解析为 JSON，否则返回文本。"""
     try:
         return resp.json()
     except Exception:
@@ -229,6 +246,7 @@ def _extract_payload(resp: httpx.Response) -> Any:
 
 @app.post("/v1/chat/completions")
 async def chat_completions(_: None = Depends(verify_proxy_key), request: Request = None):
+    """代理转发 /v1/chat/completions，并在发送前应用 override。"""
     body = await request.json()
     patched_body = apply_overrides(body, request.app.state.override_map)
     is_stream = bool(patched_body.get("stream"))

@@ -193,6 +193,7 @@ async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dic
                         try:
                             obj = json.loads(raw)
                             patched = _apply_replacements_to_any(obj, replacements)
+                            patched = _fix_text_prefix(patched)
                             out_lines.append("data: " + json.dumps(patched, ensure_ascii=False))
                         except Exception:
                             patched_str = raw
@@ -269,6 +270,21 @@ def _apply_replacements_to_any(payload: Any, replacements: Dict[str, str]):
         return [_apply_replacements_to_any(item, replacements) for item in payload]
     if isinstance(payload, dict):
         return {k: _apply_replacements_to_any(v, replacements) for k, v in payload.items()}
+    return payload
+
+
+def _fix_text_prefix(payload: Any):
+    """确保 text 字段前缀 <thinking> 被替换为 <think>，避免首块漏替换。"""
+    if isinstance(payload, dict):
+        patched = {}
+        for k, v in payload.items():
+            if k == "text" and isinstance(v, str) and v.startswith("<thinking>"):
+                patched[k] = "<think>" + v[len("<thinking>") :]
+            else:
+                patched[k] = _fix_text_prefix(v)
+        return patched
+    if isinstance(payload, list):
+        return [_fix_text_prefix(item) for item in payload]
     return payload
 
 

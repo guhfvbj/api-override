@@ -179,6 +179,23 @@ def _apply_replacements_to_any(payload: Any, replacements: Dict[str, str]):
     return payload
 
 
+def _strip_undefined_fields(payload: Any):
+    """清理请求体中值为占位符/None的字段，避免上游 400。"""
+    placeholder = "[undefined]"
+    if isinstance(payload, list):
+        return [_strip_undefined_fields(item) for item in payload]
+    if isinstance(payload, dict):
+        cleaned: Dict[str, Any] = {}
+        for k, v in payload.items():
+            if v is None:
+                continue
+            if isinstance(v, str) and v.strip() == placeholder:
+                continue
+            cleaned[k] = _strip_undefined_fields(v)
+        return cleaned
+    return payload
+
+
 async def verify_proxy_key(
     authorization: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None)
 ) -> None:
@@ -352,7 +369,8 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     """代理转发 /v1/chat/completions，并在发送前应用 override。"""
     body = await request.json()
     patched_body = apply_overrides(body, request.app.state.override_map)
-    is_stream = bool(patched_body.get("stream"))
+    cleaned_body = _strip_undefined_fields(patched_body)
+    is_stream = bool(cleaned_body.get("stream"))
     incoming_model = body.get("model")
     rule = request.app.state.override_map.get(incoming_model) or request.app.state.override_map.get(
         patched_body.get("model")
@@ -365,21 +383,29 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     headers = _build_upstream_headers()
 
     if is_stream:
-        async with client.stream("POST", url, headers=headers, json=patched_body) as upstream_resp:
-            if upstream_resp.status_code >= 400:
-                error_detail = await upstream_resp.aread()
-                raise HTTPException(
-                    status_code=upstream_resp.status_code,
-                    detail=error_detail.decode("utf-8", errors="ignore"),
-                )
-
-            return StreamingResponse(
-                _safe_stream(upstream_resp),
-                media_type=upstream_resp.headers.get("content-type", "text/event-stream"),
+        upstream_resp = await client.stream("POST", url, headers=headers, json=cleaned_body)
+        if upstream_resp.status_code >= 400:
+            error_detail = await upstream_resp.aread()
+            await upstream_resp.aclose()
+            raise HTTPException(
                 status_code=upstream_resp.status_code,
+                detail=error_detail.decode("utf-8", errors="ignore"),
             )
 
-    resp = await client.post(url, headers=headers, json=patched_body)
+        async def stream_upstream():
+            try:
+                async for chunk in _safe_stream(upstream_resp):
+                    yield chunk
+            finally:
+                await upstream_resp.aclose()
+
+        return StreamingResponse(
+            stream_upstream(),
+            media_type=upstream_resp.headers.get("content-type", "text/event-stream"),
+            status_code=upstream_resp.status_code,
+        )
+
+    resp = await client.post(url, headers=headers, json=cleaned_body)
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=_extract_error(resp))
 

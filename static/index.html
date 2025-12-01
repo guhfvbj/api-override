@@ -30,6 +30,47 @@
       display: flex;
       justify-content: center;
     }
+    .hidden { display: none !important; }
+    .login-screen {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at 20% 20%, rgba(0, 194, 255, 0.12), transparent 35%),
+                  radial-gradient(circle at 70% 10%, rgba(157, 107, 255, 0.15), transparent 35%),
+                  linear-gradient(135deg, #0d1117, #0b0f16);
+      padding: 20px;
+      z-index: 10;
+    }
+    .login-card {
+      width: min(420px, 100%);
+      background: rgba(22, 27, 34, 0.92);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px 20px 22px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .login-card h2 {
+      margin: 0;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .login-desc {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .login-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
     .shell {
       width: min(1100px, 100%);
       background: linear-gradient(135deg, rgba(22, 27, 34, 0.9), rgba(22, 27, 34, 0.7));
@@ -175,13 +216,34 @@
   </style>
 </head>
 <body>
-  <div class="shell">
+  <div class="login-screen" id="loginScreen">
+    <div class="login-card">
+      <h2>登录 newapi 代理</h2>
+      <p class="login-desc">请输入代理地址与 API Key，登录后写入变量并解锁 WebUI。</p>
+      <label>
+        代理地址（含端口）
+        <input id="loginEndpoint" placeholder="http://localhost:14300" />
+      </label>
+      <label>
+        代理 API Key（PROXY_API_KEY，可留空）
+        <input id="loginKey" placeholder="如果未设置可留空" />
+      </label>
+      <div class="login-actions">
+        <button id="loginBtn">进入 WebUI</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="shell hidden" id="appShell">
     <header>
       <div class="title">
         <span style="font-size:20px;">newapi 代理 WebUI</span>
         <span class="pill">默认端口 14300</span>
       </div>
-      <button class="secondary" id="getModelsBtn">拉取模型</button>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <button class="secondary" id="logoutBtn">重新登录</button>
+        <button class="secondary" id="getModelsBtn">拉取模型</button>
+      </div>
     </header>
 
     <div class="row">
@@ -223,6 +285,12 @@
   </div>
 
   <script>
+    const shell = document.getElementById('appShell');
+    const loginScreen = document.getElementById('loginScreen');
+    const loginEndpointInput = document.getElementById('loginEndpoint');
+    const loginKeyInput = document.getElementById('loginKey');
+    const loginBtn = document.getElementById('loginBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
     const chatBox = document.getElementById('chatBox');
     const statusLine = document.getElementById('statusLine');
     const modelsBox = document.getElementById('modelsBox');
@@ -233,7 +301,6 @@
     const userInput = document.getElementById('userInput');
 
     const defaultOrigin = window.location.origin.includes('http') ? window.location.origin : 'http://localhost:14300';
-    endpointInput.value = defaultOrigin;
 
     let conversation = [];
 
@@ -320,9 +387,53 @@
       setStatus('已清空对话');
     }
 
+    function applyCredentials(endpoint, key) {
+      const resolvedEndpoint = endpoint || defaultOrigin;
+      endpointInput.value = resolvedEndpoint;
+      loginEndpointInput.value = resolvedEndpoint;
+      proxyKeyInput.value = key || '';
+      loginKeyInput.value = key || '';
+    }
+
+    function enterApp() {
+      const endpoint = (loginEndpointInput.value.trim() || defaultOrigin);
+      const key = loginKeyInput.value.trim();
+      applyCredentials(endpoint, key);
+      localStorage.setItem('proxy_endpoint', endpoint);
+      localStorage.setItem('proxy_key', key);
+      loginScreen.classList.add('hidden');
+      shell.classList.remove('hidden');
+      setStatus('已登录，可开始调用');
+    }
+
+    function showLogin() {
+      shell.classList.add('hidden');
+      loginScreen.classList.remove('hidden');
+      conversation = [];
+      chatBox.innerHTML = '';
+      setStatus('');
+    }
+
+    function hydrateFromStorage() {
+      const savedEndpoint = localStorage.getItem('proxy_endpoint');
+      const savedKey = localStorage.getItem('proxy_key');
+      applyCredentials(savedEndpoint || defaultOrigin, savedKey || '');
+      if (savedEndpoint || savedKey) {
+        loginScreen.classList.add('hidden');
+        shell.classList.remove('hidden');
+        setStatus('已从本地读取配置，可直接使用');
+      } else {
+        showLogin();
+      }
+    }
+
     document.getElementById('getModelsBtn').onclick = fetchModels;
     document.getElementById('sendBtn').onclick = sendMessage;
     document.getElementById('clearBtn').onclick = clearChat;
+    loginBtn.onclick = enterApp;
+    logoutBtn.onclick = showLogin;
+
+    hydrateFromStorage();
   </script>
 </body>
 </html>

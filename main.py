@@ -155,7 +155,7 @@ def _build_upstream_headers() -> Dict[str, str]:
 
 
 async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dict[str, str]] = None):
-    """按 SSE data 块解析并可选进行字符串替换，尽量适配跨 chunk 标签。"""
+    """流式传输时做滑动窗口替换，覆盖跨 chunk 的标签/字符串，兼容 StreamClosed。"""
     if not replacements:
         try:
             async for chunk in upstream_resp.aiter_raw():
@@ -167,64 +167,24 @@ async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dic
             raise
         return
 
-    buffer = ""
+    max_key_len = max((len(k) for k in replacements.keys() if k), default=0)
+    tail_len = max(0, max_key_len - 1)
+    tail = ""
     try:
         async for piece in upstream_resp.aiter_text():
-            buffer += piece
-            while "\n\n" in buffer:
-                block, buffer = buffer.split("\n\n", 1)
-                lines = block.splitlines()
-                out_lines = []
-                for line in lines:
-                    if line.startswith("data:"):
-                        data_part = line[5:].lstrip()
-                        try:
-                            obj = json.loads(data_part)
-                            patched = _apply_replacements_to_any(obj, replacements)
-                            out_lines.append("data: " + json.dumps(patched, ensure_ascii=False))
-                        except Exception:
-                            # 回退为纯字符串替换，适配无法解析的片段
-                            patched_str = data_part
-                            for src, dst in replacements.items():
-                                if src is None or dst is None:
-                                    continue
-                                patched_str = patched_str.replace(str(src), str(dst))
-                            out_lines.append("data: " + patched_str)
-                    else:
-                        # 非 data 行做直接字符串替换
-                        patched_line = line
-                        for src, dst in replacements.items():
-                            if src is None or dst is None:
-                                continue
-                            patched_line = patched_line.replace(str(src), str(dst))
-                        out_lines.append(patched_line)
-                yield ("\n".join(out_lines) + "\n\n").encode("utf-8")
-        # flush 剩余
-        if buffer:
-            lines = buffer.splitlines()
-            out_lines = []
-            for line in lines:
-                if line.startswith("data:"):
-                    data_part = line[5:].lstrip()
-                    try:
-                        obj = json.loads(data_part)
-                        patched = _apply_replacements_to_any(obj, replacements)
-                        out_lines.append("data: " + json.dumps(patched, ensure_ascii=False))
-                    except Exception:
-                        patched_str = data_part
-                        for src, dst in replacements.items():
-                            if src is None or dst is None:
-                                continue
-                            patched_str = patched_str.replace(str(src), str(dst))
-                        out_lines.append("data: " + patched_str)
-                else:
-                    patched_line = line
-                    for src, dst in replacements.items():
-                        if src is None or dst is None:
-                            continue
-                        patched_line = patched_line.replace(str(src), str(dst))
-                    out_lines.append(patched_line)
-            yield ("\n".join(out_lines)).encode("utf-8")
+            combined = tail + piece
+            for src, dst in replacements.items():
+                if src is None or dst is None:
+                    continue
+                combined = combined.replace(str(src), str(dst))
+            if tail_len > 0 and len(combined) > tail_len:
+                emit, tail = combined[:-tail_len], combined[-tail_len:]
+            else:
+                emit, tail = "", combined
+            if emit:
+                yield emit.encode("utf-8")
+        if tail:
+            yield tail.encode("utf-8")
     except httpx.StreamClosed:
         logger.warning("上游流已关闭，提前结束推送")
     except Exception:

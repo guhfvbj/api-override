@@ -408,6 +408,14 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     url = f"{NEWAPI_BASE_URL}/v1/chat/completions"
     headers = _build_upstream_headers()
 
+    # ��Ӧ�滻������ͬʱӦ���ڷǻ����������ʽӦ��
+    response_repls: Dict[str, str] = {}
+    if rule:
+        if rule.response_replacements:
+            response_repls.update(rule.response_replacements)
+        if rule.replacements:
+            response_repls.update(rule.replacements)
+
     if is_stream:
         # 使用显式 send(stream=True) 保证在响应被消费完之前不会关闭上游连接
         request_obj = client.build_request("POST", url, headers=headers, json=cleaned_body)
@@ -422,7 +430,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
         async def stream_upstream():
             try:
-                async for chunk in _safe_stream(upstream_resp):
+                async for chunk in _safe_stream(upstream_resp, response_repls):
                     yield chunk
             finally:
                 await upstream_resp.aclose()

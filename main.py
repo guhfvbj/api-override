@@ -93,6 +93,18 @@ def _build_upstream_headers() -> Dict[str, str]:
     }
 
 
+async def _safe_stream(upstream_resp: httpx.Response):
+    """包装上游流式响应，容错关闭事件，避免 StreamClosed 报错。"""
+    try:
+        async for chunk in upstream_resp.aiter_raw():
+            yield chunk
+    except httpx.StreamClosed:
+        logger.warning("上游流已关闭，提前结束推送")
+    except Exception:
+        logger.exception("转发流式响应时发生异常")
+        raise
+
+
 def _apply_replacements_to_messages(messages: Any, replacements: Dict[str, str]):
     """对消息列表中的 content 逐条做字符串替换。"""
     return _apply_replacements_to_any(messages, replacements)
@@ -280,7 +292,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
                 )
 
             return StreamingResponse(
-                upstream_resp.aiter_raw(),
+                _safe_stream(upstream_resp),
                 media_type=upstream_resp.headers.get("content-type", "text/event-stream"),
                 status_code=upstream_resp.status_code,
             )

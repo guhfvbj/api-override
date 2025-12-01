@@ -154,11 +154,22 @@ def _build_upstream_headers() -> Dict[str, str]:
     }
 
 
-async def _safe_stream(upstream_resp: httpx.Response):
-    """包装上游流式响应，容错关闭事件，避免 StreamClosed 报错。"""
+async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dict[str, str]] = None):
+    """包装上游流式响应，支持字符串替换并容错 StreamClosed。"""
     try:
         async for chunk in upstream_resp.aiter_raw():
-            yield chunk
+            data = chunk
+            if replacements:
+                try:
+                    text = chunk.decode("utf-8", errors="ignore")
+                    for src, dst in replacements.items():
+                        if src is None or dst is None:
+                            continue
+                        text = text.replace(str(src), str(dst))
+                    data = text.encode("utf-8")
+                except Exception:
+                    logger.debug("响应流替换失败，回退原始数据块")
+            yield data
     except httpx.StreamClosed:
         logger.warning("上游流已关闭，提前结束推送")
     except Exception:

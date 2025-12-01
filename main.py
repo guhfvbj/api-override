@@ -398,19 +398,29 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     headers = _build_upstream_headers()
 
     if is_stream:
-        async with client.stream("POST", url, headers=headers, json=cleaned_body) as upstream_resp:
-            if upstream_resp.status_code >= 400:
-                error_detail = await upstream_resp.aread()
-                raise HTTPException(
-                    status_code=upstream_resp.status_code,
-                    detail=error_detail.decode("utf-8", errors="ignore"),
-                )
-
-            return StreamingResponse(
-                _safe_stream(upstream_resp),
-                media_type=upstream_resp.headers.get("content-type", "text/event-stream"),
+        # 使用显式 send(stream=True) 保证在响应被消费完之前不会关闭上游连接
+        request_obj = client.build_request("POST", url, headers=headers, json=cleaned_body)
+        upstream_resp = await client.send(request_obj, stream=True)
+        if upstream_resp.status_code >= 400:
+            error_detail = await upstream_resp.aread()
+            await upstream_resp.aclose()
+            raise HTTPException(
                 status_code=upstream_resp.status_code,
+                detail=error_detail.decode("utf-8", errors="ignore"),
             )
+
+        async def stream_upstream():
+            try:
+                async for chunk in _safe_stream(upstream_resp):
+                    yield chunk
+            finally:
+                await upstream_resp.aclose()
+
+        return StreamingResponse(
+            stream_upstream(),
+            media_type=upstream_resp.headers.get("content-type", "text/event-stream"),
+            status_code=upstream_resp.status_code,
+        )
 
     resp = await client.post(url, headers=headers, json=cleaned_body)
     if resp.status_code >= 400:

@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -20,6 +20,7 @@ logger = logging.getLogger("newapi-proxy")
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
 DEFAULT_PORT = int(os.getenv("PORT", 14300))
+OVERRIDE_STORE_PATH = BASE_DIR / "override_store.json"
 
 # 上游 newapi 相关配置
 NEWAPI_BASE_URL = os.getenv("NEWAPI_BASE_URL", "https://api.newapi.ai")
@@ -30,12 +31,13 @@ MODEL_OVERRIDE_MAP_RAW = os.getenv("MODEL_OVERRIDE_MAP", "{}")
 
 @dataclass
 class OverrideRule:
-    """模型覆盖规则，支持重定向模型、追加 system、强制参数、文本替换。"""
+    """模型覆盖规则，支持重定向模型、追加 system、强制参数、请求与响应替换。"""
 
     target_model: Optional[str] = None
     prepend_system: Optional[str] = None
     force_params: Dict[str, Any] = field(default_factory=dict)
     replacements: Dict[str, str] = field(default_factory=dict)
+    response_replacements: Dict[str, str] = field(default_factory=dict)
 
 
 def _parse_override_map(raw: str) -> Dict[str, OverrideRule]:
@@ -62,6 +64,9 @@ def _parse_override_map(raw: str) -> Dict[str, OverrideRule]:
                 prepend_system=cfg.get("prepend_system"),
                 force_params=cfg.get("force_params") or {},
                 replacements=cfg.get("replace") or cfg.get("replacements") or {},
+                response_replacements=cfg.get("response_replace")
+                or cfg.get("response_replacements")
+                or {},
             )
         else:
             logger.warning("不支持的模型覆盖配置 %s: %s", model_id, cfg)
@@ -77,6 +82,48 @@ def _strip_trailing_slash(url: str) -> str:
 
 
 NEWAPI_BASE_URL = _strip_trailing_slash(NEWAPI_BASE_URL)
+
+
+def _load_persisted_overrides() -> Dict[str, OverrideRule]:
+    """从本地持久化文件读取覆写规则。"""
+    if not OVERRIDE_STORE_PATH.exists():
+        return {}
+    try:
+        raw = OVERRIDE_STORE_PATH.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return {
+                mid: OverrideRule(
+                    target_model=cfg.get("target_model") or cfg.get("model") or mid,
+                    prepend_system=cfg.get("prepend_system"),
+                    force_params=cfg.get("force_params") or {},
+                    replacements=cfg.get("replace") or cfg.get("replacements") or {},
+                    response_replacements=cfg.get("response_replace")
+                    or cfg.get("response_replacements")
+                    or {},
+                )
+                for mid, cfg in data.items()
+                if isinstance(cfg, dict)
+            }
+    except Exception as exc:
+        logger.warning("读取覆写持久化文件失败：%s", exc)
+    return {}
+
+
+def _persist_overrides(overrides: Dict[str, OverrideRule]) -> None:
+    """写入覆写规则到本地文件。"""
+    serializable = {}
+    for mid, rule in overrides.items():
+        if not isinstance(rule, OverrideRule):
+            continue
+        serializable[mid] = {
+            "target_model": rule.target_model,
+            "prepend_system": rule.prepend_system,
+            "force_params": rule.force_params,
+            "replacements": rule.replacements,
+            "response_replacements": rule.response_replacements,
+        }
+    OVERRIDE_STORE_PATH.write_text(json.dumps(serializable, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _require_upstream_key() -> None:
@@ -151,10 +198,11 @@ async def verify_proxy_key(
 async def lifespan(app: FastAPI):
     """启动/关闭生命周期：检测配置并创建共享 HTTP 客户端。"""
     _require_upstream_key()
-    timeout = httpx.Timeout(60.0, connect=10.0)
+    timeout = httpx.Timeout(None, connect=20.0, read=None, write=None, pool=None)
     async with httpx.AsyncClient(timeout=timeout) as client:
         app.state.http_client = client
-        app.state.override_map = override_map
+        persisted = _load_persisted_overrides()
+        app.state.override_map = persisted or override_map
         logger.info("上游 newapi 地址：%s", NEWAPI_BASE_URL)
         yield
         logger.info("代理已停止，HTTP 客户端已关闭")
@@ -257,12 +305,46 @@ async def list_models(_: None = Depends(verify_proxy_key), request: Request = No
     return JSONResponse(content=payload, status_code=resp.status_code)
 
 
+@app.get("/overrides")
+async def get_overrides(_: None = Depends(verify_proxy_key), request: Request = None):
+    """获取当前覆写规则（持久化+内存）。"""
+    return JSONResponse(content=_override_map_to_dict(request.app.state.override_map))
+
+
+@app.post("/overrides")
+async def save_overrides(
+    overrides: Dict[str, Any] = Body(default_factory=dict), request: Request = None, _: None = Depends(verify_proxy_key)
+):
+    """保存覆写规则到本地文件，并更新内存配置。"""
+    parsed = _parse_override_map(json.dumps(overrides))
+    request.app.state.override_map = parsed
+    _persist_overrides(parsed)
+    logger.info("覆写规则已更新，条目数：%s", len(parsed))
+    return JSONResponse(content={"status": "ok", "count": len(parsed)})
+
+
 def _extract_payload(resp: httpx.Response) -> Any:
     """尽量把响应解析为 JSON，否则返回文本。"""
     try:
         return resp.json()
     except Exception:
         return resp.text
+
+
+def _override_map_to_dict(overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
+    """将 OverrideRule 映射转换为可序列化字典。"""
+    result: Dict[str, Any] = {}
+    for mid, rule in (overrides or {}).items():
+        if not isinstance(rule, OverrideRule):
+            continue
+        result[mid] = {
+            "target_model": rule.target_model,
+            "prepend_system": rule.prepend_system,
+            "force_params": rule.force_params,
+            "replacements": rule.replacements,
+            "response_replacements": rule.response_replacements,
+        }
+    return result
 
 
 @app.post("/v1/chat/completions")
@@ -302,9 +384,15 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
         raise HTTPException(status_code=resp.status_code, detail=_extract_error(resp))
 
     payload = _extract_payload(resp)
-    if rule and rule.replacements:
-        payload = _apply_replacements_to_any(payload, rule.replacements)
-        logger.info("响应替换已应用，模型=%s，规则数=%s", incoming_model, len(rule.replacements))
+    response_repls: Dict[str, str] = {}
+    if rule:
+        if rule.response_replacements:
+            response_repls.update(rule.response_replacements)
+        if rule.replacements:
+            response_repls.update(rule.replacements)
+    if response_repls:
+        payload = _apply_replacements_to_any(payload, response_repls)
+        logger.info("响应替换已应用，模型=%s，规则数=%s", incoming_model, len(response_repls))
     media_type = resp.headers.get("content-type", "application/json")
     if isinstance(payload, (dict, list)):
         return JSONResponse(content=payload, status_code=resp.status_code, media_type=media_type)

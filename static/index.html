@@ -319,6 +319,8 @@
       loginScreen.classList.add('hidden');
       shell.classList.remove('hidden');
       setStatus('已登录，可管理覆写规则');
+      fetchOverrides();
+      fetchModels();
     }
 
     function showLogin() {
@@ -327,14 +329,10 @@
       setStatus('已返回登录');
     }
 
-    function hydrateFromStorage() {
+    async function hydrateFromStorage() {
       const savedEndpoint = localStorage.getItem('proxy_endpoint');
       const savedKey = localStorage.getItem('proxy_key');
-      const savedSettings = localStorage.getItem('model_settings');
       applyCredentials(savedEndpoint || defaultOrigin, savedKey || '');
-      if (savedSettings) {
-        try { modelSettings = JSON.parse(savedSettings) || {}; } catch { modelSettings = {}; }
-      }
       if (savedEndpoint || savedKey) {
         loginScreen.classList.add('hidden');
         shell.classList.remove('hidden');
@@ -342,6 +340,7 @@
       } else {
         showLogin();
       }
+      await fetchOverrides();
       renderConfigPreview();
     }
 
@@ -384,7 +383,60 @@
       configPreview.value = JSON.stringify(cfg, null, 2);
     }
 
-    function saveSettings() {
+    async function fetchOverrides() {
+      const endpoint = endpointInput.value.trim() || defaultOrigin;
+      try {
+        const resp = await fetch(`${endpoint}/overrides`, { headers: buildHeaders() });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(JSON.stringify(data));
+        modelSettings = {};
+        Object.entries(data || {}).forEach(([mid, cfg]) => {
+          modelSettings[mid] = {
+            systemPrompt: cfg.prepend_system || '',
+            requestPairs: objToPairs(cfg.replacements || cfg.replace || {}),
+            responsePairs: objToPairs(cfg.response_replacements || cfg.replacements || {}),
+            requestText: pairsToText(objToPairs(cfg.replacements || cfg.replace || {})),
+            responseText: pairsToText(objToPairs(cfg.response_replacements || cfg.replacements || {})),
+          };
+        });
+        renderConfigPreview();
+        updateSettingsLine();
+      } catch (err) {
+        setStatus(`获取覆写配置失败：${err}`);
+      }
+    }
+
+    async function persistOverrides() {
+      const endpoint = endpointInput.value.trim() || defaultOrigin;
+      const payload = {};
+      Object.entries(modelSettings).forEach(([mid, item]) => {
+        payload[mid] = {
+          target_model: item.targetModel || mid,
+          prepend_system: item.systemPrompt || undefined,
+          replace: pairsToObject(item.requestPairs || []),
+          response_replacements: pairsToObject(item.responsePairs || []),
+          force_params: item.forceParams || undefined,
+        };
+      });
+      const resp = await fetch(`${endpoint}/overrides`, {
+        method: 'POST',
+        headers: buildHeaders(),
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
+      setStatus(`覆写配置已持久化（${data.count} 条）`);
+    }
+
+    function objToPairs(obj) {
+      return Object.entries(obj || {}).map(([k, v]) => [k, v]);
+    }
+
+    function pairsToText(pairs) {
+      return (pairs || []).map(([a, b]) => `${a} => ${b}`).join('\n');
+    }
+
+    async function saveSettings() {
       const modelId = settingsModelId.value.trim();
       if (!modelId) return;
       const systemPrompt = settingsSystemPrompt.value.trim();
@@ -399,11 +451,16 @@
         requestPairs,
         responsePairs
       };
-      localStorage.setItem('model_settings', JSON.stringify(modelSettings));
       settingsModal.classList.add('hidden');
       updateSettingsLine();
       renderConfigPreview();
-      setStatus(`已保存模型 ${modelId} 的覆写设置`);
+      try {
+        await persistOverrides();
+      } catch (err) {
+        setStatus(`保存覆写到服务端失败：${err}`);
+        return;
+      }
+      setStatus(`已保存模型 ${modelId} 的覆写设置并同步到服务端`);
     }
 
     loginBtn.onclick = enterApp;

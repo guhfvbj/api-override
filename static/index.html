@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>newapi OpenAI 代理覆写器</title>
+  <title>newapi OpenAI 代理覆写面板</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
@@ -98,7 +98,7 @@
   <div class="login-screen" id="loginScreen">
     <div class="login-card">
       <h2>登录 newapi 代理</h2>
-      <p class="login-desc">请输入代理地址与 API Key，登录后解锁覆写管理界面。</p>
+      <p class="login-desc">请输入代理地址和 API Key，登录后解锁覆写管理界面。</p>
       <label>
         代理地址（含端口）
         <input id="loginEndpoint" placeholder="http://localhost:14300" />
@@ -108,7 +108,7 @@
         <input id="loginKey" placeholder="如果未设置可留空" />
       </label>
       <div class="login-actions">
-        <button id="loginBtn">进入覆写器</button>
+        <button id="loginBtn">进入覆写台</button>
       </div>
     </div>
   </div>
@@ -116,7 +116,7 @@
   <div class="shell hidden" id="appShell">
     <header>
       <div class="title">
-        <span style="font-size:20px;">newapi 覆写器</span>
+        <span style="font-size:20px;">newapi 覆写台</span>
         <span class="pill">仅转发与内容覆写，不带聊天功能</span>
       </div>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -131,7 +131,7 @@
           <span style="color:var(--text); font-weight:600;">模型列表</span>
           <button class="secondary" style="padding:8px 10px;" id="refreshModelsBtn">刷新</button>
         </div>
-        <div class="note small">点击模型打开独立覆写设置（系统提示 / 返回替换）。</div>
+        <div class="note small">点击模型打开独立覆写设置（系统提示 / 请求替换 / 响应替换）。</div>
         <div class="models" id="modelsBox">尚未拉取模型</div>
       </aside>
 
@@ -152,7 +152,7 @@
         </div>
         <div class="note" id="currentSettingsLine">未选择模型。</div>
 
-        <div class="note">此页面只提供覆写配置与日志，不会发起聊天请求。请求/响应覆写请在模型设置中配置。</div>
+        <div class="note">此页面只提供覆写配置与日志，不会发起聊天请求。需要响应覆写请在模型设置中配置。</div>
 
         <div style="display:grid; grid-template-columns: 1fr; gap:8px; margin-top:10px;">
           <label>
@@ -174,6 +174,13 @@
         <h3 class="modal-title">模型覆写设置</h3>
         <button class="secondary" id="closeSettingsBtn" style="padding:8px 10px;">关闭</button>
       </div>
+      <div class="note small" style="margin-bottom:8px; padding:8px; border-radius:8px; background:rgba(0,0,0,0.25); border:1px solid var(--border); line-height:1.5;">
+        <strong>Thinking 覆写说明：</strong><br />
+        服务端环境变量 <code>THINKING_OVERRIDE_ENABLED=true</code> 时：<br />
+        1）系统提示词最前面会自动追加 antml 思考配置；<br />
+        2）流式响应中的 <code>&lt;thinking&gt;</code> / <code>&lt;/thinking&gt;</code> 标签会被覆写，便于前端解析。<br />
+        关闭该环境变量则完整透传上游输出。
+      </div>
       <label>
         模型 ID（只读）
         <input id="settingsModelId" readonly />
@@ -184,16 +191,16 @@
       </label>
       <label>
         请求内容查找替换（对上游前的 messages.content，行内：原文 => 新文）
-        <textarea id="settingsRequestRepl" placeholder="例如：\n敏感词 => 友好词\nbad => good"></textarea>
+        <textarea id="settingsRequestRepl" placeholder="例如：&#10;敏感词 => 友好词&#10;bad => good"></textarea>
       </label>
       <label>
         响应内容查找替换（对上游返回的文本，行内：原文 => 新文）
-        <textarea id="settingsResponseRepl" placeholder="例如：\n内部词 => 外显词\nfoo => bar"></textarea>
+        <textarea id="settingsResponseRepl" placeholder="例如：&#10;内部词 => 外显词&#10;foo => bar"></textarea>
       </label>
       <div class="login-actions">
         <button id="saveSettingsBtn">保存设置</button>
       </div>
-      <div class="note small">请求替换会作用于 messages.content；响应替换会作用于返回 JSON 中的字符串字段。</div>
+      <div class="note small">请求替换作用于 messages.content；响应替换作用于返回 JSON 的字符串字段。</div>
     </div>
   </div>
 
@@ -366,7 +373,7 @@
       const promptInfo = cfg.systemPrompt ? '已设系统提示' : '系统提示未设';
       const reqInfo = cfg.requestPairs && cfg.requestPairs.length ? `请求替换：${cfg.requestPairs.length} 条` : '请求替换未设';
       const respInfo = cfg.responsePairs && cfg.responsePairs.length ? `响应替换：${cfg.responsePairs.length} 条` : '响应替换未设';
-      currentSettingsLine.textContent = `当前模型：${model} ｜ ${promptInfo} ｜ ${reqInfo} ｜ ${respInfo}。`;
+      currentSettingsLine.textContent = `当前模型：${model} · ${promptInfo} · ${reqInfo} · ${respInfo}`;
     }
 
     function renderConfigPreview() {

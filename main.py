@@ -27,6 +27,16 @@ NEWAPI_BASE_URL = os.getenv("NEWAPI_BASE_URL", "https://api.newapi.ai")
 NEWAPI_API_KEY = os.getenv("NEWAPI_API_KEY")
 PROXY_API_KEY = os.getenv("PROXY_API_KEY")
 MODEL_OVERRIDE_MAP_RAW = os.getenv("MODEL_OVERRIDE_MAP", "{}")
+THINKING_OVERRIDE_ENABLED = os.getenv("THINKING_OVERRIDE_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+THINKING_SYSTEM_PREFIX = (
+    "<antml:thinking_mode>interleaved</antml:thinking_mode>"
+    "<antml:max_thinking_length>1600000</antml:max_thinking_length>"
+)
 
 
 @dataclass
@@ -425,6 +435,21 @@ async def _safe_stream_thinking_v2(upstream_resp: httpx.Response):
         raise
 
 
+def _inject_thinking_system_prefix(messages: Any):
+    """在消息列表中为第一个 system 消息前置 THINKING_SYSTEM_PREFIX。"""
+    if not isinstance(messages, list) or not THINKING_SYSTEM_PREFIX:
+        return messages
+    # 查找第一个 system 消息
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == "system":
+            content = msg.get("content")
+            if isinstance(content, str) and not content.startswith(THINKING_SYSTEM_PREFIX):
+                msg["content"] = THINKING_SYSTEM_PREFIX + content
+            return messages
+    # 没有 system 消息时，在最前面插入一条
+    return [{"role": "system", "content": THINKING_SYSTEM_PREFIX}] + messages
+
+
 def _apply_replacements_to_messages(messages: Any, replacements: Dict[str, str]):
     """对消息列表中的 content 逐条做字符串替换。"""
     return _apply_replacements_to_any(messages, replacements)
@@ -565,6 +590,10 @@ def apply_overrides(payload: Dict[str, Any], overrides: Dict[str, OverrideRule])
         patched["messages"] = _apply_replacements_to_messages(messages, rule.replacements)
         logger.info("请求替换已应用，模型=%s，规则数=%s", model, len(rule.replacements))
 
+    if THINKING_OVERRIDE_ENABLED:
+        messages = patched.get("messages") or []
+        if isinstance(messages, list):
+            patched["messages"] = _inject_thinking_system_prefix(messages)
     return patched
 
 

@@ -729,7 +729,8 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
     # 3）根据渠道选择上游 base_url / api_key
     upstream_channels: Dict[str, Dict[str, str]] = getattr(request.app.state, "upstream_channels", {}) or {}
-    base_url, api_key, channel_name = await _choose_upstream_for_request(rule, upstream_channels)  # type: ignore[arg-type]
+    # 选择具体上游（base_url、api_key 与可选渠道名），注意此处为同步函数调用
+    base_url, api_key, channel_name = _choose_upstream_for_request(rule, upstream_channels)  # type: ignore[arg-type]
 
     url = f"{_strip_trailing_slash(base_url)}/v1/chat/completions"
     headers = {
@@ -789,4 +790,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=DEFAULT_PORT, reload=False)
-

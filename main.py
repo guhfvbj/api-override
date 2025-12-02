@@ -27,16 +27,13 @@ NEWAPI_BASE_URL = os.getenv("NEWAPI_BASE_URL", "https://api.newapi.ai")
 NEWAPI_API_KEY = os.getenv("NEWAPI_API_KEY")
 PROXY_API_KEY = os.getenv("PROXY_API_KEY")
 MODEL_OVERRIDE_MAP_RAW = os.getenv("MODEL_OVERRIDE_MAP", "{}")
-THINKING_OVERRIDE_ENABLED = os.getenv("THINKING_OVERRIDE_ENABLED", "true").lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-THINKING_SYSTEM_PREFIX = (
+
+# 思考覆写相关配置：由客户端请求体控制开关与预算
+THINKING_SYSTEM_TEMPLATE = (
     "<antml:thinking_mode>interleaved</antml:thinking_mode>"
-    "<antml:max_thinking_length>1600000</antml:max_thinking_length>"
+    "<antml:max_thinking_length>{max_length}</antml:max_thinking_length>"
 )
+THINKING_LENGTH_MULTIPLIER = 5
 
 
 @dataclass
@@ -65,21 +62,23 @@ def _parse_override_map(raw: str) -> Dict[str, OverrideRule]:
     result: Dict[str, OverrideRule] = {}
     for model_id, cfg in parsed.items():
         if isinstance(cfg, str):
+            # 简写： "gpt-4o": "deepseek-chat"
             result[model_id] = OverrideRule(target_model=cfg)
             continue
 
-        if isinstance(cfg, dict):
-            result[model_id] = OverrideRule(
-                target_model=cfg.get("target_model") or cfg.get("model") or model_id,
-                prepend_system=cfg.get("prepend_system"),
-                force_params=cfg.get("force_params") or {},
-                replacements=cfg.get("replace") or cfg.get("replacements") or {},
-                response_replacements=cfg.get("response_replace")
-                or cfg.get("response_replacements")
-                or {},
-            )
-        else:
+        if not isinstance(cfg, dict):
             logger.warning("不支持的模型覆盖配置 %s: %s", model_id, cfg)
+            continue
+
+        result[model_id] = OverrideRule(
+            target_model=cfg.get("target_model") or cfg.get("model") or model_id,
+            prepend_system=cfg.get("prepend_system"),
+            force_params=cfg.get("force_params") or {},
+            replacements=cfg.get("replace") or cfg.get("replacements") or {},
+            response_replacements=cfg.get("response_replace")
+            or cfg.get("response_replacements")
+            or {},
+        )
     return result
 
 
@@ -122,8 +121,8 @@ def _load_persisted_overrides() -> Dict[str, OverrideRule]:
                     prepend_system=cfg.get("prepend_system"),
                     force_params=cfg.get("force_params") or {},
                     replacements=cfg.get("replace") or cfg.get("replacements") or {},
-                    response_replacements=cfg.get("response_replace")
-                    or cfg.get("response_replacements")
+                    response_replacements=cfg.get("response_replacements")
+                    or cfg.get("response_replace")
                     or {},
                 )
                 for mid, cfg in data.items()
@@ -136,7 +135,7 @@ def _load_persisted_overrides() -> Dict[str, OverrideRule]:
 
 def _persist_overrides(overrides: Dict[str, OverrideRule]) -> None:
     """写入覆写规则到本地文件。"""
-    serializable = {}
+    serializable: Dict[str, Any] = {}
     for mid, rule in overrides.items():
         if not isinstance(rule, OverrideRule):
             continue
@@ -147,7 +146,10 @@ def _persist_overrides(overrides: Dict[str, OverrideRule]) -> None:
             "replacements": rule.replacements,
             "response_replacements": rule.response_replacements,
         }
-    OVERRIDE_STORE_PATH.write_text(json.dumps(serializable, ensure_ascii=False, indent=2), encoding="utf-8")
+    OVERRIDE_STORE_PATH.write_text(
+        json.dumps(serializable, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _require_upstream_key() -> None:
@@ -164,198 +166,15 @@ def _build_upstream_headers() -> Dict[str, str]:
     }
 
 
-async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dict[str, str]] = None):
-    """解析上游 SSE data 行，在 JSON 内部安全覆写 text/thinking：
-
-    - 只对 `<thinking>` 和 `</thinking>` 做一次性覆写（各 1 次）；
-    - 其余字符串按 replacements 做普通替换；
-    - 完成上述两处 thinking 覆写后，不再对后续内容做任何 JSON 级处理，直接透传行文本。
-
-    这样可以避免按字节流裁剪导致的 `>` 丢失问题，同时保持 SSE 结构和 JSON 完整性。
-    """
-    open_tag = "<thinking>"
-    close_tag = "</thinking>"
-
-    # 默认覆写值，可通过 replacements 自定义
-    open_repl = "<think>"
-    close_repl = "</think>"
-    other_repls: Dict[str, str] = {}
-    if replacements:
-        open_repl = replacements.get(open_tag, open_repl)
-        close_repl = replacements.get(close_tag, close_repl)
-        other_repls = {k: v for k, v in replacements.items() if k not in (open_tag, close_tag)}
-
-    open_done = False
-    close_done = False
-
-    def _patch_str(s: str) -> str:
-        nonlocal open_done, close_done
-
-        # 先应用除 thinking 之外的通用替换
-        for src, dst in other_repls.items():
-            if src is None or dst is None:
-                continue
-            s = s.replace(str(src), str(dst))
-
-        # 再对 <thinking> / </thinking> 做「各一次」的定制替换
-        if not open_done:
-            idx = s.find(open_tag)
-            if idx != -1:
-                s = s[:idx] + open_repl + s[idx + len(open_tag) :]
-                open_done = True
-
-        if open_done and not close_done:
-            idx = s.find(close_tag)
-            if idx != -1:
-                s = s[:idx] + close_repl + s[idx + len(close_tag) :]
-                close_done = True
-
-        return s
-
-    def _patch_any(payload: Any):
-        if isinstance(payload, str):
-            return _patch_str(payload)
-        if isinstance(payload, list):
-            return [_patch_any(item) for item in payload]
-        if isinstance(payload, dict):
-            return {k: _patch_any(v) for k, v in payload.items()}
-        return payload
-
-    try:
-        async for line in upstream_resp.aiter_lines():
-            # thinking 两处都已经完成且没有其它替换规则时，后续行直接透传
-            if open_done and close_done and not other_repls:
-                yield (line + "\n").encode("utf-8")
-                continue
-
-            if line.startswith("data:"):
-                raw = line[5:].lstrip()
-                if raw.strip() == "[DONE]":
-                    # 结束标记不做处理
-                    yield (line + "\n").encode("utf-8")
-                    continue
-
-                try:
-                    obj = json.loads(raw)
-                    patched = _patch_any(obj)
-                    out = "data: " + json.dumps(patched, ensure_ascii=False)
-                except Exception:
-                    # JSON 解析失败时退化为字符串替换
-                    patched_str = _patch_str(raw)
-                    out = "data: " + patched_str
-
-                yield (out + "\n").encode("utf-8")
-            else:
-                # 对非 data 行，仅在仍有替换任务时做字符串级替换
-                if open_done and close_done and not other_repls:
-                    yield (line + "\n").encode("utf-8")
-                else:
-                    yield (_patch_str(line) + "\n").encode("utf-8")
-    except httpx.StreamClosed:
-        logger.warning("上游流已关闭，提前结束推流")
-    except Exception:
-        logger.exception("转发流式响应时发生异常")
-        raise
-
-
-async def _safe_stream_thinking(upstream_resp: httpx.Response):
-    """基于 SSE JSON 结构，仅针对 thinking 段做覆写：
-
-    - 聚合 `choices[].delta.content` 的前 10 个字符（原始 `<thinking>`）全部丢弃，只输出一次 `<think>`；
-    - 首次出现的 `</thinking>` 替换为 `</think>`；
-    - 之后的内容全部原样透传。
-    """
-    open_tag_len = 10
-    consumed = 0
-    prefix_emitted = False
-    close_replaced = False
-
-    def patch_content(text: Optional[str]) -> Optional[str]:
-        nonlocal consumed, prefix_emitted, close_replaced
-        if text is None or text == "":
-            return text
-
-        s = text
-        out = ""
-
-        # 丢弃整体前 10 个字符，并只输出一次 `<think>`
-        if not prefix_emitted and consumed < open_tag_len:
-            need = open_tag_len - consumed
-            drop = min(len(s), need)
-            s = s[drop:]
-            consumed += drop
-            if consumed >= open_tag_len:
-                out += "<think>"
-                prefix_emitted = True
-
-        # 替换首个 </thinking> 为 </think>
-        if prefix_emitted and not close_replaced and s:
-            idx = s.find("</thinking>")
-            if idx != -1:
-                out += s[:idx]
-                out += "</think>"
-                close_replaced = True
-                out += s[idx + len("</thinking>") :]
-                consumed += len(text)
-                return out
-
-        out += s
-        consumed += len(text)
-        return out
-
-    try:
-        async for line in upstream_resp.aiter_lines():
-            # 两处 thinking 已全部处理完，后续行直接透传
-            if prefix_emitted and close_replaced:
-                yield (line + "\n").encode("utf-8")
-                continue
-
-            if not line.startswith("data:"):
-                yield (line + "\n").encode("utf-8")
-                continue
-
-            raw = line[5:].lstrip()
-            if raw.strip() == "[DONE]":
-                yield (line + "\n").encode("utf-8")
-                continue
-
-            try:
-                obj = json.loads(raw)
-            except Exception:
-                # 无法解析 JSON 时直接透传
-                yield (line + "\n").encode("utf-8")
-                continue
-
-            choices = obj.get("choices")
-            if isinstance(choices, list):
-                for choice in choices:
-                    if not isinstance(choice, dict):
-                        continue
-                    delta = choice.get("delta")
-                    if not isinstance(delta, dict):
-                        continue
-                    content = delta.get("content")
-                    if isinstance(content, str):
-                        delta["content"] = patch_content(content)
-
-            out_line = "data: " + json.dumps(obj, ensure_ascii=False)
-            yield (out_line + "\n").encode("utf-8")
-    except httpx.StreamClosed:
-        logger.warning("上游流已关闭，提前结束推流")
-    except Exception:
-        logger.exception("转发流式响应时发生异常")
-        raise
-
-
 async def _safe_stream_thinking_v2(upstream_resp: httpx.Response):
-    """基于 SSE JSON 结构，仅针对 thinking 段做覆写：
+    """基于 SSE JSON 结构，仅针对 thinking 段做覆写。
 
     - 聚合 `choices[].delta.content` 的前 10 个字符（原始 `<thinking>`）全部丢弃，只输出一次 `<think>`；
-    - 首次出现的 `</thinking>` 替换为 `</think>`；
+    - 首次出现 `</thinking>` 替换为 `</think>`；
     - 之后的内容全部原样透传。
     """
     open_tag_len = 10  # `<thinking>` 的长度
-    dropped = 0        # 已丢弃的前缀字符数（跨 chunk 累积）
+    dropped = 0  # 已丢弃的前缀字符数（跨 chunk 累积）
     prefix_emitted = False
     close_replaced = False
 
@@ -377,7 +196,7 @@ async def _safe_stream_thinking_v2(upstream_resp: httpx.Response):
                 out += "<think>"
                 prefix_emitted = True
 
-        # 2. 将首个 `</thinking>` 替换为 `</think>`（只替一次）
+        # 2. 将首次 `</thinking>` 替换为 `</think>`（只替一次）
         if prefix_emitted and not close_replaced and s:
             idx = s.find("</thinking>")
             if idx != -1:
@@ -429,30 +248,30 @@ async def _safe_stream_thinking_v2(upstream_resp: httpx.Response):
             out_line = "data: " + json.dumps(obj, ensure_ascii=False)
             yield (out_line + "\n").encode("utf-8")
     except httpx.StreamClosed:
-        logger.warning("上游流已关闭，提前结束推流")
+        logger.warning("上游流已关闭，提前结束推送")
     except Exception:
         logger.exception("转发流式响应时发生异常")
         raise
 
 
-def _inject_thinking_system_prefix(messages: Any):
-    """在消息列表中为第一个 system 消息前置 THINKING_SYSTEM_PREFIX。"""
-    if not isinstance(messages, list) or not THINKING_SYSTEM_PREFIX:
+def _build_thinking_system_prefix(max_length: int) -> str:
+    """根据思考长度构造 antml 思考系统前缀。"""
+    return THINKING_SYSTEM_TEMPLATE.format(max_length=max_length)
+
+
+def _inject_thinking_system_prefix(messages: Any, prefix: str):
+    """在消息列表中为第一条 system 消息前置指定的思考系统前缀。"""
+    if not isinstance(messages, list) or not prefix:
         return messages
-    # 查找第一个 system 消息
+    # 查找第一条 system 消息
     for msg in messages:
         if isinstance(msg, dict) and msg.get("role") == "system":
             content = msg.get("content")
-            if isinstance(content, str) and not content.startswith(THINKING_SYSTEM_PREFIX):
-                msg["content"] = THINKING_SYSTEM_PREFIX + content
+            if isinstance(content, str) and not content.startswith(prefix):
+                msg["content"] = prefix + content
             return messages
     # 没有 system 消息时，在最前面插入一条
-    return [{"role": "system", "content": THINKING_SYSTEM_PREFIX}] + messages
-
-
-def _apply_replacements_to_messages(messages: Any, replacements: Dict[str, str]):
-    """对消息列表中的 content 逐条做字符串替换。"""
-    return _apply_replacements_to_any(messages, replacements)
+    return [{"role": "system", "content": prefix}] + messages
 
 
 def _apply_replacements_to_any(payload: Any, replacements: Dict[str, str]):
@@ -477,6 +296,11 @@ def _apply_replacements_to_any(payload: Any, replacements: Dict[str, str]):
     return payload
 
 
+def _apply_replacements_to_messages(messages: Any, replacements: Dict[str, str]):
+    """对消息列表中的 content 逐条做字符串替换。"""
+    return _apply_replacements_to_any(messages, replacements)
+
+
 def _fix_thinking_prefix(payload: Any):
     """针对 text/字符串前缀出现 <thinking 或 </thinking 的情况做前缀修正。"""
     if isinstance(payload, str):
@@ -495,7 +319,7 @@ def _fix_thinking_prefix(payload: Any):
 def _fix_text_prefix(payload: Any):
     """确保 text 字段前缀 <thinking> 被替换为 <think>，避免首块漏替换。"""
     if isinstance(payload, dict):
-        patched = {}
+        patched: Dict[str, Any] = {}
         for k, v in payload.items():
             if k == "text" and isinstance(v, str) and v.startswith("<thinking>"):
                 patched[k] = "<think>" + v[len("<thinking>") :]
@@ -508,7 +332,7 @@ def _fix_text_prefix(payload: Any):
 
 
 def _strip_undefined_fields(payload: Any):
-    """清理请求体中值为占位符/None的字段，避免上游 400。"""
+    """清理请求体中值为占位或 None 的字段，避免上游 400。"""
     placeholder = "[undefined]"
     if isinstance(payload, list):
         return [_strip_undefined_fields(item) for item in payload]
@@ -525,9 +349,10 @@ def _strip_undefined_fields(payload: Any):
 
 
 async def verify_proxy_key(
-    authorization: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None)
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
 ) -> None:
-    """校验代理层的 API Key（支持 Authorization/X-Api-Key）。"""
+    """校验代理层的 API Key（支持 Authorization / X-Api-Key）。"""
     if not PROXY_API_KEY:
         return
     supplied: Optional[str] = None
@@ -562,8 +387,54 @@ else:
     logger.info("未找到 static 目录，跳过 Web UI 挂载")
 
 
-def apply_overrides(payload: Dict[str, Any], overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
-    """根据 override 规则修改模型 ID、追加 system、强制参数与内容替换。"""
+def _extract_thinking_max_length(payload: Dict[str, Any]) -> Optional[int]:
+    """从 Cherry Studio providerOptions 中提取思考预算，返回 max_thinking_length。"""
+    provider_options = payload.get("providerOptions")
+    if not isinstance(provider_options, dict):
+        return None
+
+    for provider_id, provider_cfg in provider_options.items():
+        if not isinstance(provider_cfg, dict):
+            continue
+        thinking_cfg = provider_cfg.get("thinking")
+        if not isinstance(thinking_cfg, dict):
+            continue
+
+        type_val = thinking_cfg.get("type")
+        if not isinstance(type_val, str):
+            continue
+        t = type_val.lower()
+        # 兼容 enabled / enable，其他（如 disabled/disable）视为关闭
+        if t not in ("enabled", "enable"):
+            continue
+
+        budget = thinking_cfg.get("budget_tokens")
+        try:
+            budget_val = int(budget)
+        except (TypeError, ValueError):
+            logger.warning("thinking 配置 budget_tokens 非法：%r", budget)
+            continue
+        if budget_val <= 0:
+            continue
+
+        max_length = budget_val * THINKING_LENGTH_MULTIPLIER
+        logger.info(
+            "检测到 thinking 启用：provider=%s, budget_tokens=%s, max_length=%s",
+            provider_id,
+            budget_val,
+            max_length,
+        )
+        return max_length
+
+    return None
+
+
+def apply_overrides(
+    payload: Dict[str, Any],
+    overrides: Dict[str, OverrideRule],
+    thinking_max_length: Optional[int] = None,
+) -> Dict[str, Any]:
+    """根据 override 规则修改模型 ID、追加 system、强制参数与内容替换，并按需注入思考前缀。"""
     if not isinstance(payload, dict):
         return payload
 
@@ -573,27 +444,34 @@ def apply_overrides(payload: Dict[str, Any], overrides: Dict[str, OverrideRule])
     if not rule:
         return patched
 
+    # 模型别名重定向
     if rule.target_model:
         patched["model"] = rule.target_model
 
+    # 追加系统提示词
     if rule.prepend_system:
         messages = patched.get("messages") or []
         if isinstance(messages, list):
             messages = [{"role": "system", "content": rule.prepend_system}] + messages
         patched["messages"] = messages
 
+    # 强制参数
     for key, value in (rule.force_params or {}).items():
         patched[key] = value
 
+    # 请求内容替换
     if rule.replacements:
         messages = patched.get("messages")
         patched["messages"] = _apply_replacements_to_messages(messages, rule.replacements)
         logger.info("请求替换已应用，模型=%s，规则数=%s", model, len(rule.replacements))
 
-    if THINKING_OVERRIDE_ENABLED:
+    # 思考系统前缀：仅当客户端显式开启 thinking 且提供预算时才注入
+    if thinking_max_length is not None and thinking_max_length > 0:
         messages = patched.get("messages") or []
         if isinstance(messages, list):
-            patched["messages"] = _inject_thinking_system_prefix(messages)
+            prefix = _build_thinking_system_prefix(thinking_max_length)
+            patched["messages"] = _inject_thinking_system_prefix(messages, prefix)
+
     return patched
 
 
@@ -622,11 +500,35 @@ def _augment_models_response(upstream_payload: Any, overrides: Dict[str, Overrid
 
 
 def _extract_error(resp: httpx.Response) -> Any:
-    """尽量提取上游错误消息的 JSON 内容。"""
+    """尽量提取上游错误消息为 JSON 内容。"""
     try:
         return resp.json()
     except Exception:
         return resp.text
+
+
+def _extract_payload(resp: httpx.Response) -> Any:
+    """尽量把响应解析为 JSON，否则返回文本。"""
+    try:
+        return resp.json()
+    except Exception:
+        return resp.text
+
+
+def _override_map_to_dict(overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
+    """将 OverrideRule 映射转换为可序列化字典。"""
+    result: Dict[str, Any] = {}
+    for mid, rule in (overrides or {}).items():
+        if not isinstance(rule, OverrideRule):
+            continue
+        result[mid] = {
+            "target_model": rule.target_model,
+            "prepend_system": rule.prepend_system,
+            "force_params": rule.force_params,
+            "replacements": rule.replacements,
+            "response_replacements": rule.response_replacements,
+        }
+    return result
 
 
 @app.get("/health")
@@ -656,13 +558,15 @@ async def list_models(_: None = Depends(verify_proxy_key), request: Request = No
 
 @app.get("/overrides")
 async def get_overrides(_: None = Depends(verify_proxy_key), request: Request = None):
-    """获取当前覆写规则（持久化+内存）。"""
+    """获取当前覆写规则（持久化 + 内存）。"""
     return JSONResponse(content=_override_map_to_dict(request.app.state.override_map))
 
 
 @app.post("/overrides")
 async def save_overrides(
-    overrides: Dict[str, Any] = Body(default_factory=dict), request: Request = None, _: None = Depends(verify_proxy_key)
+    overrides: Dict[str, Any] = Body(default_factory=dict),
+    request: Request = None,
+    _: None = Depends(verify_proxy_key),
 ):
     """保存覆写规则到本地文件，并更新内存配置。"""
     parsed = _parse_override_map(json.dumps(overrides))
@@ -672,38 +576,20 @@ async def save_overrides(
     return JSONResponse(content={"status": "ok", "count": len(parsed)})
 
 
-def _extract_payload(resp: httpx.Response) -> Any:
-    """尽量把响应解析为 JSON，否则返回文本。"""
-    try:
-        return resp.json()
-    except Exception:
-        return resp.text
-
-
-def _override_map_to_dict(overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
-    """将 OverrideRule 映射转换为可序列化字典。"""
-    result: Dict[str, Any] = {}
-    for mid, rule in (overrides or {}).items():
-        if not isinstance(rule, OverrideRule):
-            continue
-        result[mid] = {
-            "target_model": rule.target_model,
-            "prepend_system": rule.prepend_system,
-            "force_params": rule.force_params,
-            "replacements": rule.replacements,
-            "response_replacements": rule.response_replacements,
-        }
-    return result
-
-
 @app.post("/v1/chat/completions")
 async def chat_completions(_: None = Depends(verify_proxy_key), request: Request = None):
-    """代理转发 /v1/chat/completions，并在发送前应用 override。"""
+    """代理转发 /v1/chat/completions，并根据客户端思考配置按需应用覆写。"""
     body = await request.json()
-    patched_body = apply_overrides(body, request.app.state.override_map)
+
+    # 1）从客户端请求体中提取 thinking 配置（是否启用 + 预算）
+    thinking_max_length = _extract_thinking_max_length(body)
+
+    # 2）按模型覆写规则 + 思考配置修改请求体
+    patched_body = apply_overrides(body, request.app.state.override_map, thinking_max_length)
     cleaned_body = _strip_undefined_fields(patched_body)
     is_stream = bool(cleaned_body.get("stream"))
-    _log_payload("转发请求体", cleaned_body)
+    _log_payload("转发请求", cleaned_body)
+
     incoming_model = body.get("model")
     rule = request.app.state.override_map.get(incoming_model) or request.app.state.override_map.get(
         patched_body.get("model")
@@ -715,7 +601,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     url = f"{NEWAPI_BASE_URL}/v1/chat/completions"
     headers = _build_upstream_headers()
 
-    # ?????????????? JSON ?????????? text/thinking???????
+    # 响应内容替换规则（与思考开关独立）
     response_repls: Dict[str, str] = {}
     if rule:
         if rule.response_replacements:
@@ -723,6 +609,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
         if rule.replacements:
             response_repls.update(rule.replacements)
 
+    # 3）流式 / 非流式转发
     if is_stream:
         # 使用显式 send(stream=True) 保证在响应被消费完之前不会关闭上游连接
         request_obj = client.build_request("POST", url, headers=headers, json=cleaned_body)
@@ -737,8 +624,13 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
         async def stream_upstream():
             try:
-                async for chunk in _safe_stream_thinking_v2(upstream_resp):
-                    yield chunk
+                # 仅当客户端显式开启 thinking 时，才对 <thinking> 标签进行覆写；否则完全透传
+                if thinking_max_length is not None:
+                    async for chunk in _safe_stream_thinking_v2(upstream_resp):
+                        yield chunk
+                else:
+                    async for chunk in upstream_resp.aiter_bytes():
+                        yield chunk
             finally:
                 await upstream_resp.aclose()
 
@@ -748,15 +640,18 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
             status_code=upstream_resp.status_code,
         )
 
+    # 非流式
     resp = await client.post(url, headers=headers, json=cleaned_body)
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=_extract_error(resp))
 
     payload = _extract_payload(resp)
-    _log_payload("上游响应体", payload)
+    _log_payload("上游响应", payload)
+
     if response_repls:
         payload = _apply_replacements_to_any(payload, response_repls)
         logger.info("响应替换已应用，模型=%s，规则数=%s", incoming_model, len(response_repls))
+
     media_type = resp.headers.get("content-type", "application/json")
     if isinstance(payload, (dict, list)):
         return JSONResponse(content=payload, status_code=resp.status_code, media_type=media_type)
@@ -767,3 +662,4 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=DEFAULT_PORT, reload=False)
+

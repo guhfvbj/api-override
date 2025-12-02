@@ -327,70 +327,70 @@
     </div>
 
     <script>
-      const endpointInput = document.getElementById('endpoint');
-      const proxyKeyInput = document.getElementById('proxyKey');
-      const refreshModelsBtn = document.getElementById('refreshModelsBtn');
-      const reloadConfigBtn = document.getElementById('reloadConfigBtn');
-      const modelsBox = document.getElementById('modelsBox');
-      const settingsModelId = document.getElementById('settingsModelId');
-      const settingsTargetModel = document.getElementById('settingsTargetModel');
-      const settingsChannel = document.getElementById('settingsChannel');
-      const channelOptions = document.getElementById('channelOptions');
-      const saveSettingsBtn = document.getElementById('saveSettingsBtn');
-      const configPreview = document.getElementById('configPreview');
-      const logBox = document.getElementById('logBox');
-      const statusLine = document.getElementById('statusLine');
-      const currentSettingsLine = document.getElementById('currentSettingsLine');
-      const channelList = document.getElementById('channelList');
-      const newChannelName = document.getElementById('newChannelName');
-      const newChannelBaseUrl = document.getElementById('newChannelBaseUrl');
-      const newChannelKey = document.getElementById('newChannelKey');
-      const addChannelBtn = document.getElementById('addChannelBtn');
+      const endpointInput = document.getElementById("endpoint");
+      const proxyKeyInput = document.getElementById("proxyKey");
+      const refreshModelsBtn = document.getElementById("refreshModelsBtn");
+      const reloadConfigBtn = document.getElementById("reloadConfigBtn");
+      const modelsBox = document.getElementById("modelsBox");
+      const settingsModelId = document.getElementById("settingsModelId");
+      const settingsTargetModel = document.getElementById("settingsTargetModel");
+      const settingsChannel = document.getElementById("settingsChannel");
+      const channelOptions = document.getElementById("channelOptions");
+      const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+      const configPreview = document.getElementById("configPreview");
+      const logBox = document.getElementById("logBox");
+      const statusLine = document.getElementById("statusLine");
+      const currentSettingsLine = document.getElementById("currentSettingsLine");
+      const channelList = document.getElementById("channelList");
+      const newChannelName = document.getElementById("newChannelName");
+      const newChannelBaseUrl = document.getElementById("newChannelBaseUrl");
+      const newChannelKey = document.getElementById("newChannelKey");
+      const addChannelBtn = document.getElementById("addChannelBtn");
 
-      const defaultOrigin = window.location.origin.startsWith('http')
+      const defaultOrigin = window.location.origin.startsWith("http")
         ? window.location.origin
-        : 'http://localhost:14300';
+        : "http://localhost:14300";
 
       let modelsCache = [];
       let modelSettings = {}; // { aliasId: { targetModel, channel } }
       let upstreamChannels = {}; // { name: { base_url, api_key } }
-      let currentBaseModelId = ''; // 当前选中条目的上游模型 ID（alias_for 或自身）
-      let currentEditingModelId = ''; // 打开设置时的别名 ID，用于“重命名”时删除旧 key
+      let currentBaseModelId = ""; // 当前选中条目的上游模型 ID（alias_for 或自身）
+      let currentEditingModelId = ""; // 打开设置时的别名 ID，用于“重命名”时删除旧 key
 
       function log(msg) {
         const now = new Date().toLocaleTimeString();
-        const div = document.createElement('div');
+        const div = document.createElement("div");
         div.textContent = `[${now}] ${msg}`;
         logBox.appendChild(div);
         logBox.scrollTop = logBox.scrollHeight;
       }
 
       function setStatus(text) {
-        statusLine.textContent = text || '';
+        statusLine.textContent = text || "";
         if (text) log(text);
       }
 
       function buildHeaders() {
-        const headers = { 'Content-Type': 'application/json' };
-        const key = proxyKeyInput.value.trim() || localStorage.getItem('proxy_key') || '';
-        if (key) headers['Authorization'] = `Bearer ${key}`;
+        const headers = { "Content-Type": "application/json" };
+        const key = proxyKeyInput.value.trim() || localStorage.getItem("proxy_key") || "";
+        if (key) headers["Authorization"] = `Bearer ${key}`;
         return headers;
       }
 
       function currentEndpoint() {
-        return endpointInput.value.trim() || localStorage.getItem('proxy_endpoint') || defaultOrigin;
+        return endpointInput.value.trim() || localStorage.getItem("proxy_endpoint") || defaultOrigin;
       }
 
       function saveEndpointAndKey() {
         const ep = endpointInput.value.trim() || defaultOrigin;
         const key = proxyKeyInput.value.trim();
-        localStorage.setItem('proxy_endpoint', ep);
-        localStorage.setItem('proxy_key', key);
+        localStorage.setItem("proxy_endpoint", ep);
+        localStorage.setItem("proxy_key", key);
       }
 
       function hydrateEndpointAndKey() {
-        const ep = localStorage.getItem('proxy_endpoint') || defaultOrigin;
-        const key = localStorage.getItem('proxy_key') || '';
+        const ep = localStorage.getItem("proxy_endpoint") || defaultOrigin;
+        const key = localStorage.getItem("proxy_key") || "";
         endpointInput.value = ep;
         proxyKeyInput.value = key;
       }
@@ -398,15 +398,15 @@
       function renderChannels() {
         const entries = Object.entries(upstreamChannels || {});
         if (!entries.length) {
-          channelList.textContent = '暂无渠道，请在下方添加。';
+          channelList.textContent = "暂无渠道，请在下方添加。";
         } else {
           channelList.textContent = entries
-            .map(([name, cfg]) => `${name} (${cfg.base_url || '未配置地址'})`)
-            .join(' · ');
+            .map(([name, cfg]) => `${name} (${cfg.base_url || "未配置地址"})`)
+            .join(" · ");
         }
-        channelOptions.innerHTML = '';
+        channelOptions.innerHTML = "";
         entries.forEach(([name]) => {
-          const opt = document.createElement('option');
+          const opt = document.createElement("option");
           opt.value = name;
           channelOptions.appendChild(opt);
         });
@@ -428,7 +428,7 @@
       async function saveChannelsToServer(channelsObj) {
         const endpoint = currentEndpoint();
         const resp = await fetch(`${endpoint}/channels`, {
-          method: 'POST',
+          method: "POST",
           headers: buildHeaders(),
           body: JSON.stringify({ channels: channelsObj }),
         });
@@ -439,31 +439,31 @@
       }
 
       function renderModelList(list) {
-        modelsBox.textContent = '';
+        modelsBox.textContent = "";
         if (!list || !list.length) {
-          modelsBox.textContent = '暂无模型，请确认上游配置是否正确。';
+          modelsBox.textContent = "暂无模型，请确认上游配置是否正确。";
           return;
         }
 
         list.forEach((item) => {
-          if (!item || typeof item !== 'object') return;
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'model-item';
-          const isAlias = item.owned_by === 'proxy-override';
-          if (isAlias) btn.classList.add('alias');
+          if (!item || typeof item !== "object") return;
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "model-item";
+          const isAlias = item.owned_by === "proxy-override";
+          if (isAlias) btn.classList.add("alias");
           btn.dataset.modelId = item.id;
 
-          const main = document.createElement('span');
+          const main = document.createElement("span");
           main.textContent = item.id;
 
-          const meta = document.createElement('span');
-          meta.className = 'meta';
+          const meta = document.createElement("span");
+          meta.className = "meta";
           const metaParts = [];
           if (item.alias_for) metaParts.push(`→ ${item.alias_for}`);
           if (item.metadata && item.metadata.channel)
             metaParts.push(`渠道=${item.metadata.channel}`);
-          meta.textContent = metaParts.join(' · ');
+          meta.textContent = metaParts.join(" · ");
 
           btn.appendChild(main);
           btn.appendChild(meta);
@@ -474,16 +474,16 @@
 
       async function fetchModels() {
         const endpoint = currentEndpoint();
-        setStatus('正在拉取模型列表...');
+        setStatus("正在拉取模型列表...");
         try {
           const resp = await fetch(`${endpoint}/v1/models`, { headers: buildHeaders() });
           const data = await resp.json();
           if (!resp.ok) throw new Error(JSON.stringify(data));
           modelsCache = data.data || [];
           renderModelList(modelsCache);
-          setStatus('模型列表已更新，点击模型可编辑覆写设置。');
+          setStatus("模型列表已更新，点击模型可编辑覆写设置。");
         } catch (err) {
-          modelsBox.textContent = '获取失败';
+          modelsBox.textContent = "获取失败";
           setStatus(`拉取模型失败：${err}`);
         }
       }
@@ -491,17 +491,17 @@
       function updateSettingsLine() {
         const aliasId = settingsModelId.value.trim();
         if (!aliasId) {
-          currentSettingsLine.textContent = '未选择模型';
+          currentSettingsLine.textContent = "未选择模型";
           return;
         }
         const targetModel = settingsTargetModel.value.trim() || aliasId;
         const channel = settingsChannel.value.trim();
-        const baseInfo = currentBaseModelId ? `上游参考=${currentBaseModelId}` : '上游参考=未选择';
+        const baseInfo = currentBaseModelId ? `上游参考=${currentBaseModelId}` : "上游参考=未选择";
         const targetInfo =
           targetModel === aliasId
-            ? '未配置重定向（上游模型与别名相同）'
+            ? "未配置重定向（上游模型与别名相同）"
             : `重定向到上游模型=${targetModel}`;
-        const channelInfo = channel ? `渠道=${channel}` : '渠道未设';
+        const channelInfo = channel ? `渠道=${channel}` : "渠道未设";
         currentSettingsLine.textContent = `别名模型=${aliasId} · ${targetInfo} · ${channelInfo} · ${baseInfo}`;
       }
 
@@ -526,12 +526,12 @@
           Object.entries(data || {}).forEach(([mid, cfg]) => {
             modelSettings[mid] = {
               targetModel: cfg.target_model || mid,
-              channel: cfg.channel || '',
+              channel: cfg.channel || "",
             };
           });
           renderConfigPreview();
           updateSettingsLine();
-          setStatus('覆写配置已同步。');
+          setStatus("覆写配置已同步。");
         } catch (err) {
           setStatus(`获取覆写配置失败：${err}`);
         }
@@ -547,7 +547,7 @@
           };
         });
         const resp = await fetch(`${endpoint}/overrides`, {
-          method: 'POST',
+          method: "POST",
           headers: buildHeaders(),
           body: JSON.stringify(payload),
         });
@@ -558,34 +558,33 @@
 
       function openSettings(modelId, modelObj) {
         currentEditingModelId = modelId;
-        currentBaseModelId = (modelObj && (modelObj.alias_for || modelObj.id)) || '';
+        currentBaseModelId = (modelObj && (modelObj.alias_for || modelObj.id)) || "";
         settingsModelId.value = modelId;
         const cfg = modelSettings[modelId] || {};
         settingsTargetModel.value = cfg.targetModel || currentBaseModelId || modelId;
         settingsChannel.value =
-          cfg.channel || (modelObj && modelObj.metadata && modelObj.metadata.channel) || '';
+          cfg.channel || (modelObj && modelObj.metadata && modelObj.metadata.channel) || "";
         updateSettingsLine();
 
-        Array.from(modelsBox.querySelectorAll('.model-item')).forEach((btn) => {
-          if (btn.dataset.modelId === modelId) btn.classList.add('active');
-          else btn.classList.remove('active');
+        Array.from(modelsBox.querySelectorAll(".model-item")).forEach((btn) => {
+          if (btn.dataset.modelId === modelId) btn.classList.add("active");
+          else btn.classList.remove("active");
         });
       }
 
       async function saveSettings() {
         const modelId = settingsModelId.value.trim();
         if (!modelId) {
-          setStatus('请先填写“客户端模型 ID（别名）”。');
+          setStatus("请先填写“客户端模型 ID（别名）”。");
           return;
         }
         const targetModel = settingsTargetModel.value.trim();
         const channel = settingsChannel.value.trim();
         if (!targetModel) {
-          setStatus('请填写“目标模型 ID（上游实际模型名）”。');
+          setStatus("请填写“目标模型 ID（上游实际模型名）”。");
           return;
         }
 
-        // 若修改了别名 ID，则视为“重命名”：删除旧 key，写入新 key
         if (currentEditingModelId && currentEditingModelId !== modelId) {
           delete modelSettings[currentEditingModelId];
           currentEditingModelId = modelId;
@@ -599,7 +598,7 @@
         renderConfigPreview();
         try {
           await persistOverrides();
-          await fetchModels(); // 刷新列表以展示新的别名（owned_by=proxy-override）
+          await fetchModels();
         } catch (err) {
           setStatus(`保存覆写到服务端失败：${err}`);
           return;
@@ -623,7 +622,7 @@
         const baseUrl = newChannelBaseUrl.value.trim();
         const apiKey = newChannelKey.value.trim();
         if (!name || !baseUrl || !apiKey) {
-          setStatus('请完整填写渠道名称、地址和密钥。');
+          setStatus("请完整填写渠道名称、地址和密钥。");
           return;
         }
         const next = { ...(upstreamChannels || {}) };
@@ -634,9 +633,9 @@
           setStatus(`保存渠道失败：${err}`);
           return;
         }
-        newChannelName.value = '';
-        newChannelBaseUrl.value = '';
-        newChannelKey.value = '';
+        newChannelName.value = "";
+        newChannelBaseUrl.value = "";
+        newChannelKey.value = "";
         setStatus(`渠道 ${name} 已更新并同步到 .env（UPSTREAM_CHANNELS）。`);
       };
 

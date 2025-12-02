@@ -488,6 +488,7 @@
 
       async function saveChannelsToServer(channelsObj) {
         const endpoint = currentEndpoint();
+        const oldChannels = { ...(upstreamChannels || {}) };
         const resp = await fetch(`${endpoint}/channels`, {
           method: "POST",
           headers: buildHeaders(),
@@ -497,9 +498,17 @@
         if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
         upstreamChannels = channelsObj;
         renderChannels();
-        // 渠道更新后，后端可能已清理某些渠道的别名，这里重新拉取一次配置和模型
-        await fetchOverrides();
-        await fetchModels();
+
+        // 计算被删除的渠道，在前端同步移除该渠道下的模型（上游 + 别名）
+        const removed = Object.keys(oldChannels).filter((name) => !(name in channelsObj));
+        if (removed.length) {
+          modelsCache = modelsCache.filter((item) => {
+            if (!item || typeof item !== "object") return false;
+            const ch = item.metadata && item.metadata.channel;
+            return !removed.includes(ch);
+          });
+          renderModelList(modelsCache);
+        }
       }
 
       function currentModelsChannel() {
@@ -712,9 +721,29 @@
         };
         updateSettingsLine();
         renderConfigPreview();
+
+        // 前端本地更新模型列表中的别名（无需重新拉取）
+        let found = false;
+        modelsCache = modelsCache.filter((item) => {
+          if (!item || typeof item !== "object") return false;
+          if (item.owned_by === "proxy-override" && item.id === modelId) {
+            found = true;
+            return false;
+          }
+          return true;
+        });
+        const aliasModel = {
+          id: modelId,
+          object: "model",
+          owned_by: "proxy-override",
+          alias_for: targetModel,
+          metadata: channel ? { channel } : {},
+        };
+        modelsCache.push(aliasModel);
+        renderModelList(modelsCache);
+
         try {
           await persistOverrides();
-          await fetchModels();
         } catch (err) {
           setStatus(`保存覆写到服务端失败：${err}`);
           return;
@@ -729,6 +758,8 @@
         }
         delete modelSettings[aliasId];
         renderConfigPreview();
+
+        // 清空右侧编辑区（如果当前正在编辑该别名）
         if (settingsModelId.value.trim() === aliasId) {
           settingsModelId.value = "";
           settingsTargetModel.value = "";
@@ -737,9 +768,15 @@
           currentBaseModelId = "";
           updateSettingsLine();
         }
+
+        // 本地从模型列表中移除该别名
+        modelsCache = modelsCache.filter((item) => {
+          return !(item && item.owned_by === "proxy-override" && item.id === aliasId);
+        });
+        renderModelList(modelsCache);
+
         try {
           await persistOverrides();
-          await fetchModels();
         } catch (err) {
           setStatus(`删除别名失败：${err}`);
           return;
@@ -778,7 +815,8 @@
       newAliasBtn.onclick = newAlias;
       deleteAliasBtn.onclick = deleteAlias;
       modelsChannelFilter.onchange = () => {
-        fetchModels();
+        // 切换渠道时仅基于已缓存的模型做前端筛选，不触发新的拉取
+        renderModelList(modelsCache);
       };
 
       addChannelBtn.onclick = async () => {
@@ -808,9 +846,9 @@
         loadHiddenModels();
         await fetchChannels();
         await fetchOverrides();
+        // 初始拉取一次模型列表，后续只在点击“刷新模型”时拉取
         await fetchModels();
       })();
     </script>
   </body>
 </html>
-

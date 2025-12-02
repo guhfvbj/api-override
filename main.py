@@ -492,7 +492,7 @@ async def health() -> Dict[str, str]:
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     """Web UI 首页。"""
-    index_file = STATIC_DIR & Path("index.html")
+    index_file = STATIC_DIR / "index.html"
     if index_file.exists():
         return FileResponse(index_file)
     return HTMLResponse("<h2>newapi 代理</h2><p>未找到静态文件目录</p>")
@@ -605,4 +605,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=DEFAULT_PORT, reload=False)
-

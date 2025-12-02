@@ -155,79 +155,96 @@ def _build_upstream_headers() -> Dict[str, str]:
 
 
 async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dict[str, str]] = None):
-    """针对 newapi 流式 text 做 thinking 覆写：
-    1）前 10 个字符强制覆写为 `<think>`（假设上游以 `<thinking>` 开头）；
-    2）搜索首个 `</thinking>` 并替换为 `</think>`；
-    3）完成上述两处替换后，其余内容原样透传以提升效率。
+    """解析上游 SSE data 行，在 JSON 内部安全覆写 text/thinking：
+
+    - 只对 `<thinking>` 和 `</thinking>` 做一次性覆写（各 1 次）；
+    - 其余字符串按 replacements 做普通替换；
+    - 完成上述两处 thinking 覆写后，不再对后续内容做任何 JSON 级处理，直接透传行文本。
+
+    这样可以避免按字节流裁剪导致的 `>` 丢失问题，同时保持 SSE 结构和 JSON 完整性。
     """
-    # 默认覆写值，如配置了 replacements 则允许自定义
+    open_tag = "<thinking>"
+    close_tag = "</thinking>"
+
+    # 默认覆写值，可通过 replacements 自定义
     open_repl = "<think>"
     close_repl = "</think>"
+    other_repls: Dict[str, str] = {}
     if replacements:
-        open_repl = replacements.get("<thinking>", open_repl)
-        close_repl = replacements.get("</thinking>", close_repl)
+        open_repl = replacements.get(open_tag, open_repl)
+        close_repl = replacements.get(close_tag, close_repl)
+        other_repls = {k: v for k, v in replacements.items() if k not in (open_tag, close_tag)}
 
-    prefix_len = 10  # `<thinking>` 长度
-    close_tag = "</thinking>"
-    close_tag_len = len(close_tag)
-
-    prefix_done = False
+    open_done = False
     close_done = False
-    buffer = ""
+
+    def _patch_str(s: str) -> str:
+        nonlocal open_done, close_done
+
+        # 先应用除 thinking 之外的通用替换
+        for src, dst in other_repls.items():
+            if src is None or dst is None:
+                continue
+            s = s.replace(str(src), str(dst))
+
+        # 再对 <thinking> / </thinking> 做「各一次」的定制替换
+        if not open_done:
+            idx = s.find(open_tag)
+            if idx != -1:
+                s = s[:idx] + open_repl + s[idx + len(open_tag) :]
+                open_done = True
+
+        if open_done and not close_done:
+            idx = s.find(close_tag)
+            if idx != -1:
+                s = s[:idx] + close_repl + s[idx + len(close_tag) :]
+                close_done = True
+
+        return s
+
+    def _patch_any(payload: Any):
+        if isinstance(payload, str):
+            return _patch_str(payload)
+        if isinstance(payload, list):
+            return [_patch_any(item) for item in payload]
+        if isinstance(payload, dict):
+            return {k: _patch_any(v) for k, v in payload.items()}
+        return payload
 
     try:
-        async for piece in upstream_resp.aiter_text():
-            # 如果已经完成所有替换，后续快速透传
-            if prefix_done and close_done:
-                yield piece.encode("utf-8")
+        async for line in upstream_resp.aiter_lines():
+            # thinking 两处都已经完成且没有其它替换规则时，后续行直接透传
+            if open_done and close_done and not other_repls:
+                yield (line + "\n").encode("utf-8")
                 continue
 
-            buffer += piece
+            if line.startswith("data:"):
+                raw = line[5:].lstrip()
+                if raw.strip() == "[DONE]":
+                    # 结束标记不做处理
+                    yield (line + "\n").encode("utf-8")
+                    continue
 
-            # 步骤 1：强制首段输出 <think>，无论当前缓存是否满足 10 字符
-            if not prefix_done and buffer:
-                emit_len = prefix_len if len(buffer) >= prefix_len else len(buffer)
-                buffer = buffer[emit_len:]
-                yield open_repl.encode("utf-8")
-                prefix_done = True
+                try:
+                    obj = json.loads(raw)
+                    patched = _patch_any(obj)
+                    out = "data: " + json.dumps(patched, ensure_ascii=False)
+                except Exception:
+                    # JSON 解析失败时退化为字符串替换
+                    patched_str = _patch_str(raw)
+                    out = "data: " + patched_str
 
-            # 步骤 2：查找并替换首个 </thinking>
-            if prefix_done and not close_done:
-                while True:
-                    idx = buffer.find(close_tag)
-                    if idx != -1:
-                        # 输出关闭标签前的内容
-                        if idx > 0:
-                            yield buffer[:idx].encode("utf-8")
-                        # 输出替换后的 </thinking>
-                        yield close_repl.encode("utf-8")
-                        close_done = True
-                        # 关闭标签之后的内容可直接透传
-                        buffer = buffer[idx + close_tag_len :]
-                        if buffer:
-                            yield buffer.encode("utf-8")
-                        buffer = ""
-                        break
-
-                    # 未找到关闭标签，为避免缓冲过大，仅保留可能构成标签的尾部
-                    keep = close_tag_len - 1
-                    if len(buffer) > keep:
-                        emit_len = len(buffer) - keep
-                        yield buffer[:emit_len].encode("utf-8")
-                        buffer = buffer[emit_len:]
-                    break
-
-        # 结束时如果还有残留且未完成关闭标签替换，直接输出剩余内容
-        if buffer:
-            if not prefix_done:
-                yield open_repl.encode("utf-8")
-                buffer = ""
-            elif not close_done:
-                yield buffer.encode("utf-8")
+                yield (out + "\n").encode("utf-8")
+            else:
+                # 对非 data 行，仅在仍有替换任务时做字符串级替换
+                if open_done and close_done and not other_repls:
+                    yield (line + "\n").encode("utf-8")
+                else:
+                    yield (_patch_str(line) + "\n").encode("utf-8")
     except httpx.StreamClosed:
-        logger.warning("上游流式连接已提前关闭")
+        logger.warning("上游流已关闭，提前结束推流")
     except Exception:
-        logger.exception("转发上游流式响应时发生异常")
+        logger.exception("转发流式响应时发生异常")
         raise
 
 

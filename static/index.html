@@ -165,7 +165,7 @@
     <header>
       <div class="title">
         <span>newapi OpenAI 代理覆写面板</span>
-        <span class="pill">思考模式 · 渠道可选 · 重定向</span>
+        <span class="pill">思考模式 · 渠道 · 重定向</span>
       </div>
       <div class="row" style="grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.1fr) auto;">
         <label>
@@ -213,13 +213,13 @@
         </div>
         <div class="row">
           <label>
-            渠道标识（可选，配置后转发时会附加 X-Channel）
-            <input id="settingsChannel" list="channelOptions" placeholder="例如：a / b / fox；留空则不附加渠道头" />
+            渠道标识（可选，配置后转发时会附加 X-Channel 并选用对应上游配置）
+            <input id="settingsChannel" list="channelOptions" placeholder="例如：a / b / fox；留空则使用默认上游" />
             <datalist id="channelOptions"></datalist>
           </label>
         </div>
         <div class="note">
-          <strong>重定向规则</strong>：客户端用别名（如 <code>claude-sonnet-4-常用</code>），代理把 <code>model</code> 改成目标模型（如 <code>claude-sonnet-4</code>），并可附加渠道头 <code>X-Channel</code>（若设置渠道）。
+          <strong>重定向规则</strong>：客户端用别名（如 <code>claude-sonnet-4-常用</code>），代理把 <code>model</code> 改成目标模型（如 <code>claude-sonnet-4</code>），并可附加渠道头 <code>X-Channel</code>（若设置渠道），从而将请求发送到对应上游地址和密钥。
         </div>
         <div class="note">
           <strong>Thinking 覆写说明：</strong><br />
@@ -235,17 +235,25 @@
 
     <section class="panel">
       <div class="panel-header">
-        <span>渠道列表</span>
-        <span class="note">手动添加渠道，或从模型/覆写中汇总</span>
+        <span>渠道配置（上游地址与密钥）</span>
+        <span class="note">与环境变量 <code>UPSTREAM_CHANNELS</code> 双向同步</span>
       </div>
       <div id="channelList" class="note">暂无渠道</div>
       <div class="row">
         <label>
-          新增渠道
-          <input id="newChannelInput" placeholder="例如：a / b / fox" />
+          渠道名称
+          <input id="newChannelName" placeholder="例如：a / b / fox" />
+        </label>
+        <label>
+          上游地址 base_url
+          <input id="newChannelBaseUrl" placeholder="例如：http://localhost:3000" />
+        </label>
+        <label>
+          上游密钥 api_key
+          <input id="newChannelKey" placeholder="例如：sk-xxxx" />
         </label>
         <div style="display:flex;align-items:flex-end;">
-          <button id="addChannelBtn" class="secondary">添加渠道</button>
+          <button id="addChannelBtn" class="secondary">添加/更新渠道</button>
         </div>
       </div>
     </section>
@@ -286,7 +294,9 @@
     const statusLine = document.getElementById('statusLine');
     const currentSettingsLine = document.getElementById('currentSettingsLine');
     const channelList = document.getElementById('channelList');
-    const newChannelInput = document.getElementById('newChannelInput');
+    const newChannelName = document.getElementById('newChannelName');
+    const newChannelBaseUrl = document.getElementById('newChannelBaseUrl');
+    const newChannelKey = document.getElementById('newChannelKey');
     const addChannelBtn = document.getElementById('addChannelBtn');
 
     const defaultOrigin = window.location.origin.startsWith('http')
@@ -295,7 +305,7 @@
 
     let modelsCache = [];
     let modelSettings = {};
-    let serverChannels = [];
+    let upstreamChannels = {};
 
     function log(msg) {
       const now = new Date().toLocaleTimeString();
@@ -335,52 +345,47 @@
       proxyKeyInput.value = key;
     }
 
+    function renderChannels() {
+      const entries = Object.entries(upstreamChannels || {});
+      if (!entries.length) {
+        channelList.textContent = '暂无渠道，请在下方添加。';
+      } else {
+        channelList.textContent = entries
+          .map(([name, cfg]) => `${name} (${cfg.base_url || '未配置地址'})`)
+          .join(' · ');
+      }
+      channelOptions.innerHTML = '';
+      entries.forEach(([name]) => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        channelOptions.appendChild(opt);
+      });
+    }
+
     async function fetchChannels() {
       const endpoint = currentEndpoint();
       try {
         const resp = await fetch(`${endpoint}/channels`, { headers: buildHeaders() });
         const data = await resp.json();
         if (!resp.ok) throw new Error(JSON.stringify(data));
-        serverChannels = data.channels || [];
+        upstreamChannels = data.channels || {};
         renderChannels();
       } catch (err) {
         setStatus(`获取渠道失败：${err}`);
       }
     }
 
-    async function persistChannels(channels) {
+    async function saveChannelsToServer(channelsObj) {
       const endpoint = currentEndpoint();
       const resp = await fetch(`${endpoint}/channels`, {
         method: 'POST',
         headers: buildHeaders(),
-        body: JSON.stringify({ channels })
+        body: JSON.stringify({ channels: channelsObj }),
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
-      serverChannels = data.channels || channels;
+      upstreamChannels = data.channels || channelsObj;
       renderChannels();
-    }
-
-    function renderChannels() {
-      const merged = new Set(serverChannels || []);
-      (modelsCache || []).forEach((item) => {
-        if (item && item.metadata && item.metadata.channel) merged.add(item.metadata.channel);
-      });
-      Object.values(modelSettings || {}).forEach((cfg) => {
-        if (cfg.channel) merged.add(cfg.channel);
-      });
-      const list = Array.from(merged).filter(Boolean).sort((a, b) => a.localeCompare(b, 'zh-CN'));
-      if (!list.length) {
-        channelList.textContent = '暂无渠道，手动添加或在模型配置中填写渠道后会自动汇总。';
-      } else {
-        channelList.textContent = list.join(' · ');
-      }
-      channelOptions.innerHTML = '';
-      list.forEach((c) => {
-        const opt = document.createElement('option');
-        opt.value = c;
-        channelOptions.appendChild(opt);
-      });
     }
 
     function renderModelList(list) {
@@ -425,7 +430,6 @@
         if (!resp.ok) throw new Error(JSON.stringify(data));
         modelsCache = data.data || [];
         renderModelList(modelsCache);
-        renderChannels();
         setStatus('模型列表已更新，点击模型可编辑覆写设置。');
       } catch (err) {
         modelsBox.textContent = '获取失败';
@@ -473,7 +477,6 @@
         });
         renderConfigPreview();
         updateSettingsLine();
-        renderChannels();
         setStatus('覆写配置已同步。');
       } catch (err) {
         setStatus(`获取覆写配置失败：${err}`);
@@ -497,8 +500,6 @@
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
       setStatus(`覆写配置已持久化（${data.count} 条）。`);
-      // 同步渠道到 .env
-      await fetchChannels();
     }
 
     function openSettings(modelId, modelObj) {
@@ -539,9 +540,6 @@
         return;
       }
       setStatus(`已保存模型 ${modelId} 的覆写设置并同步到服务端。`);
-      if (channel) {
-        await persistChannels([...(serverChannels || []), channel]);
-      }
     }
 
     refreshModelsBtn.onclick = () => {
@@ -556,19 +554,25 @@
     saveSettingsBtn.onclick = saveSettings;
 
     addChannelBtn.onclick = async () => {
-      const val = newChannelInput.value.trim();
-      if (!val) {
-        setStatus('请输入渠道名称。');
+      const name = newChannelName.value.trim();
+      const baseUrl = newChannelBaseUrl.value.trim();
+      const apiKey = newChannelKey.value.trim();
+      if (!name || !baseUrl || !apiKey) {
+        setStatus('请完整填写渠道名称、地址和密钥。');
         return;
       }
+      const next = { ...(upstreamChannels || {}) };
+      next[name] = { base_url: baseUrl, api_key: apiKey };
       try {
-        await persistChannels([...(serverChannels || []), val]);
+        await saveChannelsToServer(next);
       } catch (err) {
         setStatus(`保存渠道失败：${err}`);
         return;
       }
-      newChannelInput.value = '';
-      setStatus(`已添加渠道：${val}`);
+      newChannelName.value = '';
+      newChannelBaseUrl.value = '';
+      newChannelKey.value = '';
+      setStatus(`渠道 ${name} 已更新并同步到 .env。`);
     };
 
     (async function init() {

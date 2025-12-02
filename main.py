@@ -388,7 +388,42 @@ else:
 
 
 def _extract_thinking_max_length(payload: Dict[str, Any]) -> Optional[int]:
-    """从 Cherry Studio providerOptions 中提取思考预算，返回 max_thinking_length。"""
+    """从请求体中提取思考预算，返回 max_thinking_length（支持顶层 thinking 和 providerOptions.*.thinking）。"""
+
+    def _from_cfg(thinking_cfg: Any, source: str) -> Optional[int]:
+        if not isinstance(thinking_cfg, dict):
+            return None
+        type_val = thinking_cfg.get("type")
+        if not isinstance(type_val, str):
+            return None
+        t = type_val.lower()
+        # 兼容 enabled / enable，其他（如 disabled/disable）视为关闭
+        if t not in ("enabled", "enable"):
+            return None
+        budget = thinking_cfg.get("budget_tokens")
+        try:
+            budget_val = int(budget)
+        except (TypeError, ValueError):
+            logger.warning("thinking 配置 budget_tokens 非法：%r（source=%s）", budget, source)
+            return None
+        if budget_val <= 0:
+            return None
+        max_length = budget_val * THINKING_LENGTH_MULTIPLIER
+        logger.info(
+            "检测到 thinking 启用：source=%s, budget_tokens=%s, max_length=%s",
+            source,
+            budget_val,
+            max_length,
+        )
+        return max_length
+
+    # 1）优先支持 Cherry Studio 顶层字段：{"thinking": {type,budget_tokens}, ...}
+    top_level = payload.get("thinking")
+    max_len = _from_cfg(top_level, "thinking")
+    if max_len is not None:
+        return max_len
+
+    # 2）兼容旧的 providerOptions.*.thinking 结构
     provider_options = payload.get("providerOptions")
     if not isinstance(provider_options, dict):
         return None
@@ -397,34 +432,9 @@ def _extract_thinking_max_length(payload: Dict[str, Any]) -> Optional[int]:
         if not isinstance(provider_cfg, dict):
             continue
         thinking_cfg = provider_cfg.get("thinking")
-        if not isinstance(thinking_cfg, dict):
-            continue
-
-        type_val = thinking_cfg.get("type")
-        if not isinstance(type_val, str):
-            continue
-        t = type_val.lower()
-        # 兼容 enabled / enable，其他（如 disabled/disable）视为关闭
-        if t not in ("enabled", "enable"):
-            continue
-
-        budget = thinking_cfg.get("budget_tokens")
-        try:
-            budget_val = int(budget)
-        except (TypeError, ValueError):
-            logger.warning("thinking 配置 budget_tokens 非法：%r", budget)
-            continue
-        if budget_val <= 0:
-            continue
-
-        max_length = budget_val * THINKING_LENGTH_MULTIPLIER
-        logger.info(
-            "检测到 thinking 启用：provider=%s, budget_tokens=%s, max_length=%s",
-            provider_id,
-            budget_val,
-            max_length,
-        )
-        return max_length
+        max_len = _from_cfg(thinking_cfg, f"providerOptions[{provider_id}].thinking")
+        if max_len is not None:
+            return max_len
 
     return None
 
@@ -662,4 +672,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=DEFAULT_PORT, reload=False)
-

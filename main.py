@@ -27,6 +27,7 @@ NEWAPI_BASE_URL = os.getenv("NEWAPI_BASE_URL", "https://api.newapi.ai")
 NEWAPI_API_KEY = os.getenv("NEWAPI_API_KEY")
 PROXY_API_KEY = os.getenv("PROXY_API_KEY")
 MODEL_OVERRIDE_MAP_RAW = os.getenv("MODEL_OVERRIDE_MAP", "{}")
+CHANNELS_RAW = os.getenv("CHANNELS", "")
 
 # 思考覆写相关配置：由客户端请求体控制开关与预算
 THINKING_SYSTEM_TEMPLATE = (
@@ -49,6 +50,29 @@ class OverrideRule:
 def _strip_trailing_slash(url: str) -> str:
     """去掉末尾斜杠，避免重复拼接路径。"""
     return url[:-1] if url.endswith("/") else url
+
+
+def _load_channels_from_env(raw: str = CHANNELS_RAW) -> set[str]:
+    """从环境变量 CHANNELS 读取渠道列表（逗号分隔）。"""
+    channels: set[str] = set()
+    for item in (raw or "").split(","):
+        val = item.strip()
+        if val:
+            channels.add(val)
+    return channels
+
+
+def _persist_channels_to_env(channels: set[str]) -> None:
+    """写入渠道列表到 .env 的 CHANNELS，保留其他行。"""
+    env_path = BASE_DIR / ".env"
+    channel_line = f"CHANNELS={','.join(sorted(channels))}" if channels else "CHANNELS="
+    lines: list[str] = []
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+        # 去掉已有的 CHANNELS 行
+        lines = [ln for ln in lines if not ln.startswith("CHANNELS=")]
+    lines.append(channel_line)
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _log_payload(label: str, payload: Any, limit: int = 2000) -> None:
@@ -305,6 +329,13 @@ async def lifespan(app: FastAPI):
         app.state.http_client = client
         persisted = _load_persisted_overrides()
         app.state.override_map = persisted or override_map
+        # 初始渠道：环境变量 + 覆写规则中的渠道
+        channels_env = _load_channels_from_env()
+        for rule in (app.state.override_map or {}).values():
+            if rule.channel:
+                channels_env.add(rule.channel)
+        app.state.channels = channels_env
+        _persist_channels_to_env(app.state.channels)
         logger.info("上游 newapi 地址：%s", NEWAPI_BASE_URL)
         yield
         logger.info("代理已停止，HTTP 客户端已关闭")
@@ -456,6 +487,15 @@ def _override_map_to_dict(overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
     return result
 
 
+def _collect_channels(overrides: Dict[str, OverrideRule]) -> set[str]:
+    """从覆写规则收集渠道集合。"""
+    channels: set[str] = set()
+    for rule in (overrides or {}).values():
+        if rule.channel:
+            channels.add(rule.channel)
+    return channels
+
+
 @app.get("/health")
 async def health() -> Dict[str, str]:
     """健康检查。"""
@@ -497,8 +537,39 @@ async def save_overrides(
     parsed = _parse_override_map(json.dumps(overrides))
     request.app.state.override_map = parsed
     _persist_overrides(parsed)
+    # 更新渠道集合并同步到 .env
+    new_channels = _collect_channels(parsed) | (getattr(request.app.state, "channels", set()) or set())
+    request.app.state.channels = new_channels
+    _persist_channels_to_env(request.app.state.channels)
     logger.info("覆写规则已更新，条目数：%s", len(parsed))
     return JSONResponse(content={"status": "ok", "count": len(parsed)})
+
+
+@app.get("/channels")
+async def list_channels(_: None = Depends(verify_proxy_key), request: Request = None):
+    """获取渠道列表（来源：.env + 覆写规则汇总）。"""
+    channels = sorted((getattr(request.app.state, "channels", set()) or set()))
+    return JSONResponse(content={"channels": channels})
+
+
+@app.post("/channels")
+async def save_channels(
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    request: Request = None,
+    _: None = Depends(verify_proxy_key),
+):
+    """保存渠道列表到内存与 .env。"""
+    items = payload.get("channels") or []
+    channels: set[str] = set()
+    if isinstance(items, list):
+        for val in items:
+            if isinstance(val, str) and val.strip():
+                channels.add(val.strip())
+    # 保留现有覆写中的渠道，避免丢失
+    channels |= _collect_channels(getattr(request.app.state, "override_map", {}))
+    request.app.state.channels = channels
+    _persist_channels_to_env(channels)
+    return JSONResponse(content={"status": "ok", "count": len(channels)})
 
 
 @app.post("/v1/chat/completions")

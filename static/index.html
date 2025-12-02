@@ -295,7 +295,7 @@
 
     let modelsCache = [];
     let modelSettings = {};
-    let customChannels = new Set();
+    let serverChannels = [];
 
     function log(msg) {
       const now = new Date().toLocaleTimeString();
@@ -335,39 +335,43 @@
       proxyKeyInput.value = key;
     }
 
-    function loadCustomChannels() {
+    async function fetchChannels() {
+      const endpoint = currentEndpoint();
       try {
-        const raw = localStorage.getItem('custom_channels');
-        if (raw) {
-          const arr = JSON.parse(raw);
-          if (Array.isArray(arr)) {
-            customChannels = new Set(arr.filter(Boolean));
-          }
-        }
-      } catch (_) {
-        customChannels = new Set();
+        const resp = await fetch(`${endpoint}/channels`, { headers: buildHeaders() });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(JSON.stringify(data));
+        serverChannels = data.channels || [];
+        renderChannels();
+      } catch (err) {
+        setStatus(`获取渠道失败：${err}`);
       }
     }
 
-    function saveCustomChannels() {
-      localStorage.setItem('custom_channels', JSON.stringify(Array.from(customChannels)));
-    }
-
-    function collectChannels() {
-      const channels = new Set(customChannels);
-      (modelsCache || []).forEach((item) => {
-        if (item && item.metadata && item.metadata.channel) channels.add(item.metadata.channel);
+    async function persistChannels(channels) {
+      const endpoint = currentEndpoint();
+      const resp = await fetch(`${endpoint}/channels`, {
+        method: 'POST',
+        headers: buildHeaders(),
+        body: JSON.stringify({ channels })
       });
-      Object.values(modelSettings || {}).forEach((cfg) => {
-        if (cfg.channel) channels.add(cfg.channel);
-      });
-      return Array.from(channels).filter(Boolean).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
+      serverChannels = data.channels || channels;
+      renderChannels();
     }
 
     function renderChannels() {
-      const list = collectChannels();
+      const merged = new Set(serverChannels || []);
+      (modelsCache || []).forEach((item) => {
+        if (item && item.metadata && item.metadata.channel) merged.add(item.metadata.channel);
+      });
+      Object.values(modelSettings || {}).forEach((cfg) => {
+        if (cfg.channel) merged.add(cfg.channel);
+      });
+      const list = Array.from(merged).filter(Boolean).sort((a, b) => a.localeCompare(b, 'zh-CN'));
       if (!list.length) {
-        channelList.textContent = '暂无渠道，可在下方手动添加，或在模型配置中填写渠道后自动汇总。';
+        channelList.textContent = '暂无渠道，手动添加或在模型配置中填写渠道后会自动汇总。';
       } else {
         channelList.textContent = list.join(' · ');
       }
@@ -493,6 +497,8 @@
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
       setStatus(`覆写配置已持久化（${data.count} 条）。`);
+      // 同步渠道到 .env
+      await fetchChannels();
     }
 
     function openSettings(modelId, modelObj) {
@@ -534,9 +540,7 @@
       }
       setStatus(`已保存模型 ${modelId} 的覆写设置并同步到服务端。`);
       if (channel) {
-        customChannels.add(channel);
-        saveCustomChannels();
-        renderChannels();
+        await persistChannels([...(serverChannels || []), channel]);
       }
     }
 
@@ -547,25 +551,29 @@
     reloadConfigBtn.onclick = () => {
       saveEndpointAndKey();
       fetchOverrides();
+      fetchChannels();
     };
     saveSettingsBtn.onclick = saveSettings;
 
-    addChannelBtn.onclick = () => {
+    addChannelBtn.onclick = async () => {
       const val = newChannelInput.value.trim();
       if (!val) {
         setStatus('请输入渠道名称。');
         return;
       }
-      customChannels.add(val);
-      saveCustomChannels();
+      try {
+        await persistChannels([...(serverChannels || []), val]);
+      } catch (err) {
+        setStatus(`保存渠道失败：${err}`);
+        return;
+      }
       newChannelInput.value = '';
-      renderChannels();
       setStatus(`已添加渠道：${val}`);
     };
 
     (async function init() {
       hydrateEndpointAndKey();
-      loadCustomChannels();
+      await fetchChannels();
       await fetchOverrides();
       await fetchModels();
       renderChannels();

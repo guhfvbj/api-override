@@ -37,7 +37,7 @@ PROXY_API_KEY = os.getenv("PROXY_API_KEY")
 # 模型覆写规则（环境变量）
 MODEL_OVERRIDE_MAP_RAW = os.getenv("MODEL_OVERRIDE_MAP", "{}")
 
-# 上游多渠道配置（JSON）：{"a":{"base_url":"...","api_key":"..."}, ...}
+# 上游多渠道配置（JSON）：{"copilot":{"base_url":"...","api_key":"..."}, ...}
 UPSTREAM_CHANNELS_RAW = os.getenv("UPSTREAM_CHANNELS", "{}")
 
 # 思考覆写相关配置：由客户端请求体控制开关与预算
@@ -123,8 +123,8 @@ def _persist_upstream_channels_to_env(channels: Dict[str, Dict[str, str]]) -> No
 class OverrideRule:
     """模型覆写规则：支持渠道与模型重定向。"""
 
-    channel: Optional[str] = None  # 上游渠道标识
-    target_model: Optional[str] = None  # 真实上游模型 ID
+    channel: Optional[str] = None  # 绑定的上游渠道名，要求非空以实现“别名-渠道成对绑定”
+    target_model: Optional[str] = None  # 上游实际模型 ID
 
 
 def _override_from_dict(model_id: str, cfg: Any) -> Optional[OverrideRule]:
@@ -184,7 +184,7 @@ def _load_persisted_overrides() -> Dict[str, OverrideRule]:
 
 
 def _persist_overrides(overrides: Dict[str, OverrideRule]) -> None:
-    """写入覆写规则到本地文件。"""
+    """写入覆写规则到本地文件，并同步到 .env 的 MODEL_OVERRIDE_MAP。"""
     serializable: Dict[str, Any] = {}
     for mid, rule in overrides.items():
         if not isinstance(rule, OverrideRule):
@@ -193,10 +193,24 @@ def _persist_overrides(overrides: Dict[str, OverrideRule]) -> None:
             "channel": rule.channel,
             "target_model": rule.target_model,
         }
+
+    # 1）写入本地持久化文件 override_store.json
     OVERRIDE_STORE_PATH.write_text(
         json.dumps(serializable, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+    # 2）同步写入 .env 中的 MODEL_OVERRIDE_MAP（便于通过环境变量恢复配置）
+    env_path = BASE_DIR / ".env"
+    raw = json.dumps(serializable, ensure_ascii=False, separators=(",", ":"))
+    line = f"MODEL_OVERRIDE_MAP={raw}"
+
+    lines: List[str] = []
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+        lines = [ln for ln in lines if not ln.startswith("MODEL_OVERRIDE_MAP=")]
+    lines.append(line)
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _strip_undefined_fields(payload: Any) -> Any:
@@ -482,7 +496,14 @@ def _choose_upstream_for_request(
     rule: Optional[OverrideRule],
     upstream_channels: Dict[str, Dict[str, str]],
 ) -> Tuple[str, str, Optional[str]]:
-    """根据覆写规则和渠道配置选择上游 base_url / api_key / X-Channel 名称。"""
+    """根据覆写规则和渠道配置选择上游 base_url / api_key / X-Channel 名称。
+
+    逻辑：
+    - 若规则指定了渠道且配置存在，则优先使用该渠道；
+    - 否则，如果配置了 NEWAPI_*，作为默认上游；
+    - 再否则，从渠道列表中选择第一个合法渠道；
+    - 都没有时抛 500。
+    """
     # 若规则指定了渠道且配置存在，则优先使用该渠道
     if rule and rule.channel:
         cfg = upstream_channels.get(rule.channel)
@@ -513,10 +534,6 @@ async def lifespan(app: FastAPI):
     # 启动时加载渠道配置（后续可通过 /channels 更新）
     app.state.upstream_channels = _load_upstream_channels_from_env()
 
-    # 若既没有 NEWAPI_*，也没有任何渠道，则无法转发请求
-    if not (NEWAPI_BASE_URL and NEWAPI_API_KEY) and not app.state.upstream_channels:
-        raise RuntimeError("未配置 NEWAPI_* 且 UPSTREAM_CHANNELS 为空，无法选择上游")
-
     timeout = httpx.Timeout(None, connect=20.0, read=None, write=None, pool=None)
     async with httpx.AsyncClient(timeout=timeout) as client:
         app.state.http_client = client
@@ -525,12 +542,16 @@ async def lifespan(app: FastAPI):
         persisted = _load_persisted_overrides()
         app.state.override_map = persisted or override_map
 
-        logger.info("已加载上游渠道：%s", ", ".join(sorted(app.state.upstream_channels.keys())) or "（无）")
+        logger.info(
+            "已加载上游渠道：%s",
+            ", ".join(sorted(app.state.upstream_channels.keys())) or "（无）",
+        )
         yield
         logger.info("代理已停止，HTTP 客户端已关闭")
 
 
 app = FastAPI(title="newapi-openai-proxy", lifespan=lifespan)
+
 
 # 挂载静态目录以提供 Web UI
 if STATIC_DIR.exists():
@@ -683,10 +704,15 @@ async def save_channels(
     request: Request = None,
     _: None = Depends(verify_proxy_key),
 ):
-    """保存上游渠道配置到内存与 .env。"""
+    """保存上游渠道配置到内存与 .env。
+
+    额外逻辑：删除渠道时，同步删除该渠道下所有别名配置（override 中 channel 匹配的条目）。
+    """
     incoming = payload.get("channels") or {}
     if not isinstance(incoming, dict):
         raise HTTPException(status_code=400, detail="channels 字段应为对象")
+
+    old_channels: Dict[str, Dict[str, str]] = getattr(request.app.state, "upstream_channels", {}) or {}
 
     merged: Dict[str, Dict[str, str]] = {}
     for name, cfg in incoming.items():
@@ -701,8 +727,26 @@ async def save_channels(
             "api_key": api_key,
         }
 
+    # 更新渠道配置
     request.app.state.upstream_channels = merged
     _persist_upstream_channels_to_env(merged)
+
+    # 计算被删除的渠道，并同步清理对应别名配置
+    removed_channels = {name for name in old_channels.keys() if name not in merged}
+    if removed_channels:
+        overrides: Dict[str, OverrideRule] = getattr(request.app.state, "override_map", {}) or {}
+        new_overrides: Dict[str, OverrideRule] = {}
+        removed_count = 0
+        for mid, rule in overrides.items():
+            if isinstance(rule, OverrideRule) and rule.channel in removed_channels:
+                removed_count += 1
+                continue
+            new_overrides[mid] = rule
+        if removed_count:
+            request.app.state.override_map = new_overrides
+            _persist_overrides(new_overrides)
+            logger.info("因删除渠道 %s 已清理别名条目数：%s", ",".join(sorted(removed_channels)), removed_count)
+
     logger.info("上游渠道配置已更新，渠道数：%s", len(merged))
     return JSONResponse(content={"status": "ok", "count": len(merged)})
 
@@ -729,8 +773,8 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
     # 3）根据渠道选择上游 base_url / api_key
     upstream_channels: Dict[str, Dict[str, str]] = getattr(request.app.state, "upstream_channels", {}) or {}
-    # 选择具体上游（base_url、api_key 与可选渠道名），注意此处为同步函数调用
-    base_url, api_key, channel_name = _choose_upstream_for_request(rule, upstream_channels)  # type: ignore[arg-type]
+    # 注意：此处为同步函数调用
+    base_url, api_key, channel_name = _choose_upstream_for_request(rule, upstream_channels)
 
     url = f"{_strip_trailing_slash(base_url)}/v1/chat/completions"
     headers = {
@@ -790,3 +834,4 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=DEFAULT_PORT, reload=False)
+

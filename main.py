@@ -184,9 +184,10 @@ async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dic
 
             buffer += piece
 
-            # 步骤 1：确保首 10 字符被替换并立即输出 <think>
-            if not prefix_done and len(buffer) >= prefix_len:
-                buffer = buffer[prefix_len:]  # 丢弃原始前 10 字符
+            # 步骤 1：强制首段输出 <think>，无论当前缓存是否满足 10 字符
+            if not prefix_done and buffer:
+                emit_len = prefix_len if len(buffer) >= prefix_len else len(buffer)
+                buffer = buffer[emit_len:]
                 yield open_repl.encode("utf-8")
                 prefix_done = True
 
@@ -217,10 +218,12 @@ async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dic
                     break
 
         # 结束时如果还有残留且未完成关闭标签替换，直接输出剩余内容
-        if buffer and not close_done:
-            if not prefix_done and len(buffer) >= prefix_len:
-                buffer = open_repl + buffer[prefix_len:]
-            yield buffer.encode("utf-8")
+        if buffer:
+            if not prefix_done:
+                yield open_repl.encode("utf-8")
+                buffer = ""
+            elif not close_done:
+                yield buffer.encode("utf-8")
     except httpx.StreamClosed:
         logger.warning("上游流式连接已提前关闭")
     except Exception:

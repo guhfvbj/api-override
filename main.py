@@ -38,10 +38,8 @@ THINKING_LENGTH_MULTIPLIER = 5
 
 @dataclass
 class OverrideRule:
-    """模型覆写规则：只负责渠道和模型重定向。"""
+    """模型覆写规则：只负责模型重定向。"""
 
-    # 渠道标识（可选），用于区分不同上游/来源，例如：fox、cherry、webui 等
-    channel: Optional[str] = None
     # 目标模型 ID（实际发往上游的模型），为空则默认为当前别名本身
     target_model: Optional[str] = None
 
@@ -77,7 +75,6 @@ def _override_from_dict(model_id: str, cfg: Any) -> Optional[OverrideRule]:
         logger.warning("不支持的模型覆盖配置 %s: %r", model_id, cfg)
         return None
     return OverrideRule(
-        channel=cfg.get("channel"),
         target_model=cfg.get("target_model") or cfg.get("model") or model_id,
     )
 
@@ -132,7 +129,6 @@ def _persist_overrides(overrides: Dict[str, OverrideRule]) -> None:
         if not isinstance(rule, OverrideRule):
             continue
         serializable[mid] = {
-            "channel": rule.channel,
             "target_model": rule.target_model,
         }
     OVERRIDE_STORE_PATH.write_text(
@@ -410,19 +406,12 @@ def _augment_models_response(upstream_payload: Any, overrides: Dict[str, Overrid
     for alias, rule in overrides.items():
         if alias in known_ids:
             continue
-        meta: Dict[str, Any] = {}
-        if rule.channel:
-            meta["channel"] = rule.channel
-
         model_obj: Dict[str, Any] = {
             "id": alias,
             "object": "model",
             "owned_by": "proxy-override",
             "alias_for": rule.target_model or alias,
         }
-        if meta:
-            model_obj["metadata"] = meta
-
         data.append(model_obj)
 
     upstream_payload["data"] = data
@@ -452,7 +441,6 @@ def _override_map_to_dict(overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
         if not isinstance(rule, OverrideRule):
             continue
         result[mid] = {
-            "channel": rule.channel,
             "target_model": rule.target_model,
         }
     return result
@@ -527,10 +515,6 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     url = f"{NEWAPI_BASE_URL}/v1/chat/completions"
     headers = _build_upstream_headers()
 
-    # 渠道：如果规则中配置了 channel，则通过自定义头转给上游
-    if rule and rule.channel:
-        headers["X-Channel"] = rule.channel
-
     # 3）流式 / 非流式转发
     if is_stream:
         # 使用显式 send(stream=True) 保证在响应被消费完之前不会关闭上游连接
@@ -580,4 +564,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=DEFAULT_PORT, reload=False)
-

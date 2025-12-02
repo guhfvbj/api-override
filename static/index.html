@@ -101,27 +101,6 @@
       border-color: var(--accent);
       box-shadow: 0 0 0 2px rgba(0, 194, 255, 0.2);
     }
-    textarea {
-      resize: vertical;
-      min-height: 80px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      line-height: 1.4;
-    }
-    button {
-      border-radius: 999px;
-      border: none;
-      padding: 8px 12px;
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-      background: linear-gradient(135deg, var(--accent), var(--accent-2));
-      color: #0b0f16;
-    }
-    button.secondary {
-      background: transparent;
-      color: var(--text);
-      border: 1px solid var(--border);
-    }
     .layout {
       display: grid;
       grid-template-columns: minmax(0, 1.4fr) minmax(0, 2fr);
@@ -186,7 +165,7 @@
     <header>
       <div class="title">
         <span>newapi OpenAI 代理覆写面板</span>
-        <span class="pill">思考模式 · 渠道 · 重定向</span>
+        <span class="pill">思考模式 · 重定向</span>
       </div>
       <div class="row" style="grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.1fr) auto;">
         <label>
@@ -208,7 +187,7 @@
       <section class="panel">
         <div class="panel-header">
           <span>模型列表（按渠道分组）</span>
-          <span class="note">点击模型即可编辑渠道 / 重定向</span>
+          <span class="note">点击模型即可编辑重定向</span>
         </div>
         <div id="modelsBox" class="models-list">
           <div class="note">点击右上角“刷新模型”拉取 /v1/models</div>
@@ -225,10 +204,6 @@
             模型 ID（来自 /v1/models）
             <input id="settingsModelId" readonly />
           </label>
-          <label>
-            渠道标识（可选，用于区分不同上游/来源）
-            <input id="settingsChannel" placeholder="例如：fox、cherry、webui 等" />
-          </label>
         </div>
         <div class="row">
           <label>
@@ -239,8 +214,8 @@
         <div class="note">
           <strong>Thinking 覆写说明：</strong><br />
           - 当请求体中带有 <code>thinking.type = "enabled"</code> 且配置 <code>budget_tokens</code> 时，代理会自动追加 antml 思考系统提示词，长度 = <code>budget_tokens × 5</code>；<br />
-          - 流式响应中 <code>&lt;thinking&gt;</code> / <code>&lt;/thinking&gt;</code> 标签将被覆写为 <code>&lt;think&gt;</code> / <code>&lt;/think&gt;</code>，便于前端解析；<br />
-          - 未开启 thinking 时，请求与响应只做模型重定向和渠道标记，不做其它内容替换。
+          - 流式响应中 <code>&lt;thinking&gt;</code> / <code>&lt;/thinking&gt;</code> 标签将被覆写为 <code>&lt;think&gt;</code> / <code>&lt;/think&gt;</code>；<br />
+          - 未开启 thinking 时，只做模型重定向，不做其它内容替换。
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;">
           <button id="saveSettingsBtn">保存当前模型设置</button>
@@ -251,7 +226,7 @@
     <section class="panel">
       <div class="panel-header">
         <span>覆写配置预览</span>
-        <span class="note">这就是后端 /overrides 接口与环境变量 MODEL_OVERRIDE_MAP 使用的 JSON 结构</span>
+        <span class="note">与 /overrides / 环境变量 MODEL_OVERRIDE_MAP 完全一致</span>
       </div>
       <textarea id="configPreview" readonly style="min-height:140px;"></textarea>
       <div class="note">
@@ -275,7 +250,6 @@
     const reloadConfigBtn = document.getElementById('reloadConfigBtn');
     const modelsBox = document.getElementById('modelsBox');
     const settingsModelId = document.getElementById('settingsModelId');
-    const settingsChannel = document.getElementById('settingsChannel');
     const settingsTargetModel = document.getElementById('settingsTargetModel');
     const saveSettingsBtn = document.getElementById('saveSettingsBtn');
     const configPreview = document.getElementById('configPreview');
@@ -329,8 +303,7 @@
     }
 
     function getModelChannel(id, item) {
-      const cfg = modelSettings[id] || {};
-      if (cfg.channel) return cfg.channel;
+      // 优先从 /v1/models 元数据读取 channel，找不到则归为“未分组”
       if (item && item.metadata && item.metadata.channel) return item.metadata.channel;
       return '未分组';
     }
@@ -414,18 +387,16 @@
         return;
       }
       const cfg = modelSettings[modelId] || {};
-      const channelInfo = cfg.channel ? `渠道=${cfg.channel}` : '渠道未设';
       const targetInfo = cfg.targetModel && cfg.targetModel !== modelId
         ? `重定向到=${cfg.targetModel}`
         : '未配置重定向';
-      currentSettingsLine.textContent = `当前模型：${modelId} · ${channelInfo} · ${targetInfo}`;
+      currentSettingsLine.textContent = `当前模型：${modelId} · ${targetInfo}`;
     }
 
     function renderConfigPreview() {
       const cfg = {};
       Object.entries(modelSettings).forEach(([id, item]) => {
         cfg[id] = {
-          channel: item.channel || undefined,
           target_model: item.targetModel || id
         };
       });
@@ -441,7 +412,6 @@
         modelSettings = {};
         Object.entries(data || {}).forEach(([mid, cfg]) => {
           modelSettings[mid] = {
-            channel: cfg.channel || '',
             targetModel: cfg.target_model || mid
           };
         });
@@ -458,7 +428,6 @@
       const payload = {};
       Object.entries(modelSettings).forEach(([mid, item]) => {
         payload[mid] = {
-          channel: item.channel || undefined,
           target_model: item.targetModel || mid
         };
       });
@@ -475,7 +444,6 @@
     function openSettings(modelId, modelObj) {
       settingsModelId.value = modelId;
       const cfg = modelSettings[modelId] || {};
-      settingsChannel.value = cfg.channel || (modelObj && modelObj.metadata && modelObj.metadata.channel) || '';
       settingsTargetModel.value = cfg.targetModel || (modelObj && (modelObj.alias_for || modelObj.id)) || modelId;
       updateSettingsLine();
 
@@ -491,10 +459,8 @@
         setStatus('请先选择一个模型。');
         return;
       }
-      const channel = settingsChannel.value.trim();
       const targetModel = settingsTargetModel.value.trim();
       modelSettings[modelId] = {
-        channel,
         targetModel
       };
       updateSettingsLine();
@@ -526,4 +492,3 @@
   </script>
 </body>
 </html>
-

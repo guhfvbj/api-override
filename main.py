@@ -27,6 +27,16 @@ NEWAPI_BASE_URL = os.getenv("NEWAPI_BASE_URL", "https://api.newapi.ai")
 NEWAPI_API_KEY = os.getenv("NEWAPI_API_KEY")
 PROXY_API_KEY = os.getenv("PROXY_API_KEY")
 MODEL_OVERRIDE_MAP_RAW = os.getenv("MODEL_OVERRIDE_MAP", "{}")
+THINKING_OVERRIDE_ENABLED = os.getenv("THINKING_OVERRIDE_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+THINKING_SYSTEM_PREFIX = (
+    "<antml:thinking_mode>interleaved</antml:thinking_mode>"
+    "<antml:max_thinking_length>1600000</antml:max_thinking_length>"
+)
 
 
 @dataclass
@@ -425,6 +435,20 @@ async def _safe_stream_thinking_v2(upstream_resp: httpx.Response):
         raise
 
 
+def _inject_thinking_system_prefix(messages: Any):
+    """在消息列表中为第一个 system 消息前置 THINKING_SYSTEM_PREFIX。"""
+    if not isinstance(messages, list) or not THINKING_SYSTEM_PREFIX:
+        return messages
+    # 查找第一个 system 消息
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == "system":
+            content = msg.get("content")
+            if isinstance(content, str) and not content.startswith(THINKING_SYSTEM_PREFIX):
+                msg["content"] = THINKING_SYSTEM_PREFIX + content
+            return messages
+    # 没有 system 消息时，在最前面插入一条
+    return [{"role": "system", "content": THINKING_SYSTEM_PREFIX}] + messages
+
 
 def _apply_replacements_to_messages(messages: Any, replacements: Dict[str, str]):
     """对消息列表中的 content 逐条做字符串替换。"""
@@ -564,8 +588,12 @@ def apply_overrides(payload: Dict[str, Any], overrides: Dict[str, OverrideRule])
     if rule.replacements:
         messages = patched.get("messages")
         patched["messages"] = _apply_replacements_to_messages(messages, rule.replacements)
-        logger.info("???????????????=%s????????=%s", model, len(rule.replacements))
+        logger.info("请求替换已应用，模型=%s，规则数=%s", model, len(rule.replacements))
 
+    if THINKING_OVERRIDE_ENABLED:
+        messages = patched.get("messages") or []
+        if isinstance(messages, list):
+            patched["messages"] = _inject_thinking_system_prefix(messages)
     return patched
 
 
@@ -669,74 +697,13 @@ def _override_map_to_dict(overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
 
 
 @app.post("/v1/chat/completions")
-
-
-def _extract_thinking_config(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """从请求体中解析 Cherry Studio 的思考配置。"""
-    cfg = payload.get("providerOptions")
-    if not isinstance(cfg, dict):
-        return {"enabled": False, "max_length": None}
-    for _, provider_cfg in cfg.items():
-        if not isinstance(provider_cfg, dict):
-            continue
-        thinking = provider_cfg.get("thinking")
-        if not isinstance(thinking, dict):
-            continue
-        t_type = thinking.get("type")
-        # 仅当 type=enabled/enable 时生效
-        if t_type not in ("enabled", "enable"):
-            continue
-        budget = thinking.get("budget_tokens")
-        try:
-            budget_int = int(budget)
-            if budget_int > 0:
-                return {"enabled": True, "max_length": budget_int * 5}
-        except (TypeError, ValueError):
-            pass
-        # type 合法但预算缺失/无效时，视为未开启，避免误触发覆写
-        return {"enabled": False, "max_length": None}
-    return {"enabled": False, "max_length": None}
-
-
-def _inject_system_prefix(messages: Any, prefix: str) -> Any:
-    """?????????? system ?????????"""
-    if not isinstance(messages, list) or not prefix:
-        return messages
-    for msg in messages:
-        if isinstance(msg, dict) and msg.get("role") == "system":
-            content = msg.get("content")
-            if isinstance(content, str) and not content.startswith(prefix):
-                msg["content"] = prefix + content
-            return messages
-    return [{"role": "system", "content": prefix}] + messages
-
-
 async def chat_completions(_: None = Depends(verify_proxy_key), request: Request = None):
-    """代理转发 /v1/chat/completions，并在发送前应用 override，同时适配 Cherry Studio 思考配置。"""
+    """代理转发 /v1/chat/completions，并在发送前应用 override。"""
     body = await request.json()
-
-    # 解析 Cherry Studio 的思考配置（仅用于注入系统提示，不干扰基础流式逻辑）
-    thinking_cfg = _extract_thinking_config(body)
-    thinking_max_len = thinking_cfg.get("max_length")
-    thinking_enabled = bool(thinking_cfg.get("enabled") and thinking_max_len)
-    thinking_prefix = None
-    if thinking_enabled:
-        thinking_prefix = (
-            f"<antml:thinking_mode>interleaved</antml:thinking_mode>"
-            f"<antml:max_thinking_length>{thinking_max_len}</antml:max_thinking_length>"
-        )
-
     patched_body = apply_overrides(body, request.app.state.override_map)
-
-    # 按需为系统提示词追加 thinking 配置前缀
-    if thinking_prefix:
-        messages = patched_body.get("messages") or []
-        if isinstance(messages, list):
-            patched_body["messages"] = _inject_system_prefix(messages, thinking_prefix)
-
     cleaned_body = _strip_undefined_fields(patched_body)
     is_stream = bool(cleaned_body.get("stream"))
-    _log_payload("转发请求", cleaned_body)
+    _log_payload("转发请求体", cleaned_body)
     incoming_model = body.get("model")
     rule = request.app.state.override_map.get(incoming_model) or request.app.state.override_map.get(
         patched_body.get("model")
@@ -748,7 +715,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     url = f"{NEWAPI_BASE_URL}/v1/chat/completions"
     headers = _build_upstream_headers()
 
-    # 响应内容替换配置
+    # ?????????????? JSON ?????????? text/thinking???????
     response_repls: Dict[str, str] = {}
     if rule:
         if rule.response_replacements:
@@ -770,14 +737,8 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
         async def stream_upstream():
             try:
-                # 为避免影响正常输出，这里仅在存在通用响应替换配置时使用 _safe_stream，
-                # 否则完全透传上游 SSE 内容
-                if response_repls:
-                    async for chunk in _safe_stream(upstream_resp, response_repls):
-                        yield chunk
-                else:
-                    async for chunk in upstream_resp.aiter_raw():
-                        yield chunk
+                async for chunk in _safe_stream_thinking_v2(upstream_resp):
+                    yield chunk
             finally:
                 await upstream_resp.aclose()
 
@@ -792,7 +753,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
         raise HTTPException(status_code=resp.status_code, detail=_extract_error(resp))
 
     payload = _extract_payload(resp)
-    _log_payload("上游响应", payload)
+    _log_payload("上游响应体", payload)
     if response_repls:
         payload = _apply_replacements_to_any(payload, response_repls)
         logger.info("响应替换已应用，模型=%s，规则数=%s", incoming_model, len(response_repls))
@@ -800,7 +761,6 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     if isinstance(payload, (dict, list)):
         return JSONResponse(content=payload, status_code=resp.status_code, media_type=media_type)
     return Response(content=payload, status_code=resp.status_code, media_type=media_type)
-
 
 
 if __name__ == "__main__":

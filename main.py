@@ -38,20 +38,16 @@ THINKING_LENGTH_MULTIPLIER = 5
 
 @dataclass
 class OverrideRule:
-    """模型覆写规则：支持渠道标记、模型重定向、追加 system 提示词和强制参数。"""
+    """模型覆写规则：只负责渠道和模型重定向。"""
 
-    # 渠道标识（可选），用于区分不同上游/提供方，例如：cherry、webui 等
+    # 渠道标识（可选），用于区分不同上游/来源，例如：fox、cherry、webui 等
     channel: Optional[str] = None
     # 目标模型 ID（实际发往上游的模型），为空则默认为当前别名本身
     target_model: Optional[str] = None
-    # 追加的系统提示词（会插入到现有 messages 最前）
-    prepend_system: Optional[str] = None
-    # 强制附加或覆盖的请求参数
-    force_params: Dict[str, Any] = field(default_factory=dict)
 
 
 def _strip_trailing_slash(url: str) -> str:
-    """去掉末尾的斜杠，避免重复拼接路径。"""
+    """去掉末尾斜杠，避免重复拼接路径。"""
     return url[:-1] if url.endswith("/") else url
 
 
@@ -83,8 +79,6 @@ def _override_from_dict(model_id: str, cfg: Any) -> Optional[OverrideRule]:
     return OverrideRule(
         channel=cfg.get("channel"),
         target_model=cfg.get("target_model") or cfg.get("model") or model_id,
-        prepend_system=cfg.get("prepend_system"),
-        force_params=cfg.get("force_params") or {},
     )
 
 
@@ -140,8 +134,6 @@ def _persist_overrides(overrides: Dict[str, OverrideRule]) -> None:
         serializable[mid] = {
             "channel": rule.channel,
             "target_model": rule.target_model,
-            "prepend_system": rule.prepend_system,
-            "force_params": rule.force_params,
         }
     OVERRIDE_STORE_PATH.write_text(
         json.dumps(serializable, ensure_ascii=False, indent=2),
@@ -384,30 +376,17 @@ def apply_overrides(
     overrides: Dict[str, OverrideRule],
     thinking_max_length: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """根据 override 规则修改模型 ID、追加 system、强制参数，并按需注入思考前缀。"""
+    """根据 override 规则修改模型 ID，并按需注入思考前缀。"""
     if not isinstance(payload, dict):
         return payload
 
     patched = dict(payload)
     model = patched.get("model")
     rule = overrides.get(model)
-    if not rule:
-        return patched
-
-    # 模型别名重定向
-    if rule.target_model:
-        patched["model"] = rule.target_model
-
-    # 追加系统提示词
-    if rule.prepend_system:
-        messages = patched.get("messages") or []
-        if isinstance(messages, list):
-            messages = [{"role": "system", "content": rule.prepend_system}] + messages
-        patched["messages"] = messages
-
-    # 强制参数
-    for key, value in (rule.force_params or {}).items():
-        patched[key] = value
+    if rule:
+        # 模型别名重定向
+        if rule.target_model:
+            patched["model"] = rule.target_model
 
     # 思考系统前缀：仅当客户端显式开启 thinking 且提供预算时才注入
     if thinking_max_length is not None and thinking_max_length > 0:
@@ -434,8 +413,6 @@ def _augment_models_response(upstream_payload: Any, overrides: Dict[str, Overrid
         meta: Dict[str, Any] = {}
         if rule.channel:
             meta["channel"] = rule.channel
-        if rule.prepend_system:
-            meta["has_prepend_system"] = True
 
         model_obj: Dict[str, Any] = {
             "id": alias,
@@ -477,8 +454,6 @@ def _override_map_to_dict(overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
         result[mid] = {
             "channel": rule.channel,
             "target_model": rule.target_model,
-            "prepend_system": rule.prepend_system,
-            "force_params": rule.force_params,
         }
     return result
 
@@ -605,3 +580,4 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=DEFAULT_PORT, reload=False)
+

@@ -58,10 +58,10 @@
       color: var(--accent);
       font-size: 12px;
     }
-    .top-row {
+    .row {
       display: grid;
-      grid-template-columns: minmax(0, 2.1fr) minmax(0, 1.2fr);
-      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 8px;
     }
     .panel {
       border-radius: 12px;
@@ -87,7 +87,7 @@
       flex-direction: column;
       gap: 4px;
     }
-    input, textarea, select {
+    input, textarea {
       width: 100%;
       border-radius: 8px;
       border: 1px solid var(--border);
@@ -97,7 +97,7 @@
       padding: 7px 9px;
       outline: none;
     }
-    input:focus, textarea:focus, select:focus {
+    input:focus, textarea:focus {
       border-color: var(--accent);
       box-shadow: 0 0 0 2px rgba(0, 194, 255, 0.2);
     }
@@ -132,7 +132,7 @@
       overflow: auto;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 4px;
     }
     .model-item {
       width: 100%;
@@ -159,11 +159,6 @@
     }
     .model-item.active {
       box-shadow: 0 0 0 1px var(--accent);
-    }
-    .row {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 8px;
     }
     .note {
       font-size: 12px;
@@ -212,8 +207,8 @@
     <div class="layout">
       <section class="panel">
         <div class="panel-header">
-          <span>模型列表</span>
-          <span class="note">点击模型即可编辑渠道 / 重定向 / 提示词</span>
+          <span>模型列表（按渠道分组）</span>
+          <span class="note">点击模型即可编辑渠道 / 重定向</span>
         </div>
         <div id="modelsBox" class="models-list">
           <div class="note">点击右上角“刷新模型”拉取 /v1/models</div>
@@ -232,7 +227,7 @@
           </label>
           <label>
             渠道标识（可选，用于区分不同上游/来源）
-            <input id="settingsChannel" placeholder="例如：cherry、webui、browser 等" />
+            <input id="settingsChannel" placeholder="例如：fox、cherry、webui 等" />
           </label>
         </div>
         <div class="row">
@@ -241,15 +236,11 @@
             <input id="settingsTargetModel" placeholder="留空则使用当前模型 ID" />
           </label>
         </div>
-        <label>
-          追加系统提示词（会插入到 messages 最前，用于固定语气 / 语言 / 角色等）
-          <textarea id="settingsSystemPrompt" placeholder="例如：请始终用中文回答，先进行充分思考再输出最终答案。"></textarea>
-        </label>
         <div class="note">
           <strong>Thinking 覆写说明：</strong><br />
           - 当请求体中带有 <code>thinking.type = "enabled"</code> 且配置 <code>budget_tokens</code> 时，代理会自动追加 antml 思考系统提示词，长度 = <code>budget_tokens × 5</code>；<br />
           - 流式响应中 <code>&lt;thinking&gt;</code> / <code>&lt;/thinking&gt;</code> 标签将被覆写为 <code>&lt;think&gt;</code> / <code>&lt;/think&gt;</code>，便于前端解析；<br />
-          - 未开启 thinking 时，请求与响应只做模型重定向和系统提示词注入，不做其它内容替换。
+          - 未开启 thinking 时，请求与响应只做模型重定向和渠道标记，不做其它内容替换。
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;">
           <button id="saveSettingsBtn">保存当前模型设置</button>
@@ -286,7 +277,6 @@
     const settingsModelId = document.getElementById('settingsModelId');
     const settingsChannel = document.getElementById('settingsChannel');
     const settingsTargetModel = document.getElementById('settingsTargetModel');
-    const settingsSystemPrompt = document.getElementById('settingsSystemPrompt');
     const saveSettingsBtn = document.getElementById('saveSettingsBtn');
     const configPreview = document.getElementById('configPreview');
     const logBox = document.getElementById('logBox');
@@ -338,33 +328,66 @@
       proxyKeyInput.value = key;
     }
 
+    function getModelChannel(id, item) {
+      const cfg = modelSettings[id] || {};
+      if (cfg.channel) return cfg.channel;
+      if (item && item.metadata && item.metadata.channel) return item.metadata.channel;
+      return '未分组';
+    }
+
     function renderModelList(list) {
       modelsBox.textContent = '';
       if (!list || !list.length) {
         modelsBox.textContent = '暂无模型，请确认上游配置是否正确。';
         return;
       }
+
+      const groups = {};
       list.forEach((item) => {
         if (!item || typeof item !== 'object') return;
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'model-item';
-        const isAlias = item.owned_by === 'proxy-override';
-        if (isAlias) btn.classList.add('alias');
-        btn.dataset.modelId = item.id;
-        const main = document.createElement('span');
-        main.textContent = item.id;
-        const meta = document.createElement('span');
-        meta.className = 'meta';
-        const metaParts = [];
-        if (item.alias_for) metaParts.push(`→ ${item.alias_for}`);
-        const channel = item.metadata && item.metadata.channel;
-        if (channel) metaParts.push(`渠道=${channel}`);
-        meta.textContent = metaParts.join(' · ');
-        btn.appendChild(main);
-        btn.appendChild(meta);
-        btn.onclick = () => openSettings(item.id, item);
-        modelsBox.appendChild(btn);
+        const id = item.id;
+        const channel = getModelChannel(id, item);
+        if (!groups[channel]) groups[channel] = [];
+        groups[channel].push(item);
+      });
+
+      const groupEntries = Object.entries(groups).sort((a, b) => {
+        const [ca] = a;
+        const [cb] = b;
+        if (ca === '未分组') return 1;
+        if (cb === '未分组') return -1;
+        return ca.localeCompare(cb, 'zh-CN');
+      });
+
+      groupEntries.forEach(([channel, items]) => {
+        const header = document.createElement('div');
+        header.className = 'note';
+        header.style.margin = '6px 0 2px';
+        header.textContent = channel === '未分组' ? '未分组' : `渠道：${channel}`;
+        modelsBox.appendChild(header);
+
+        items.forEach((item) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'model-item';
+          const isAlias = item.owned_by === 'proxy-override';
+          if (isAlias) btn.classList.add('alias');
+          btn.dataset.modelId = item.id;
+
+          const main = document.createElement('span');
+          main.textContent = item.id;
+
+          const meta = document.createElement('span');
+          meta.className = 'meta';
+          const metaParts = [];
+          if (item.alias_for) metaParts.push(`→ ${item.alias_for}`);
+          meta.textContent = metaParts.join(' · ');
+
+          btn.appendChild(main);
+          btn.appendChild(meta);
+          btn.onclick = () => openSettings(item.id, item);
+          modelsBox.appendChild(btn);
+        });
       });
     }
 
@@ -395,8 +418,7 @@
       const targetInfo = cfg.targetModel && cfg.targetModel !== modelId
         ? `重定向到=${cfg.targetModel}`
         : '未配置重定向';
-      const promptInfo = cfg.systemPrompt ? '已设系统提示' : '系统提示未设';
-      currentSettingsLine.textContent = `当前模型：${modelId} · ${channelInfo} · ${targetInfo} · ${promptInfo}`;
+      currentSettingsLine.textContent = `当前模型：${modelId} · ${channelInfo} · ${targetInfo}`;
     }
 
     function renderConfigPreview() {
@@ -404,9 +426,7 @@
       Object.entries(modelSettings).forEach(([id, item]) => {
         cfg[id] = {
           channel: item.channel || undefined,
-          target_model: item.targetModel || id,
-          prepend_system: item.systemPrompt || undefined,
-          force_params: item.forceParams || undefined,
+          target_model: item.targetModel || id
         };
       });
       configPreview.value = JSON.stringify(cfg, null, 2);
@@ -422,9 +442,7 @@
         Object.entries(data || {}).forEach(([mid, cfg]) => {
           modelSettings[mid] = {
             channel: cfg.channel || '',
-            targetModel: cfg.target_model || mid,
-            systemPrompt: cfg.prepend_system || '',
-            forceParams: cfg.force_params || undefined,
+            targetModel: cfg.target_model || mid
           };
         });
         renderConfigPreview();
@@ -441,9 +459,7 @@
       Object.entries(modelSettings).forEach(([mid, item]) => {
         payload[mid] = {
           channel: item.channel || undefined,
-          target_model: item.targetModel || mid,
-          prepend_system: item.systemPrompt || undefined,
-          force_params: item.forceParams || undefined,
+          target_model: item.targetModel || mid
         };
       });
       const resp = await fetch(`${endpoint}/overrides`, {
@@ -461,10 +477,8 @@
       const cfg = modelSettings[modelId] || {};
       settingsChannel.value = cfg.channel || (modelObj && modelObj.metadata && modelObj.metadata.channel) || '';
       settingsTargetModel.value = cfg.targetModel || (modelObj && (modelObj.alias_for || modelObj.id)) || modelId;
-      settingsSystemPrompt.value = cfg.systemPrompt || '';
       updateSettingsLine();
 
-      // 高亮当前项
       Array.from(modelsBox.querySelectorAll('.model-item')).forEach((btn) => {
         if (btn.dataset.modelId === modelId) btn.classList.add('active');
         else btn.classList.remove('active');
@@ -479,12 +493,9 @@
       }
       const channel = settingsChannel.value.trim();
       const targetModel = settingsTargetModel.value.trim();
-      const systemPrompt = settingsSystemPrompt.value.trim();
       modelSettings[modelId] = {
         channel,
-        targetModel,
-        systemPrompt,
-        forceParams: undefined,
+        targetModel
       };
       updateSettingsLine();
       renderConfigPreview();

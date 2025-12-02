@@ -248,6 +248,95 @@ async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dic
         raise
 
 
+async def _safe_stream_thinking(upstream_resp: httpx.Response):
+    """基于 SSE JSON 结构，仅针对 thinking 段做覆写：
+
+    - 聚合 `choices[].delta.content` 的前 10 个字符（原始 `<thinking>`）全部丢弃，只输出一次 `<think>`；
+    - 首次出现的 `</thinking>` 替换为 `</think>`；
+    - 之后的内容全部原样透传。
+    """
+    open_tag_len = 10
+    consumed = 0
+    prefix_emitted = False
+    close_replaced = False
+
+    def patch_content(text: Optional[str]) -> Optional[str]:
+        nonlocal consumed, prefix_emitted, close_replaced
+        if text is None or text == "":
+            return text
+
+        s = text
+        out = ""
+
+        # 丢弃整体前 10 个字符，并只输出一次 `<think>`
+        if not prefix_emitted and consumed < open_tag_len:
+            need = open_tag_len - consumed
+            drop = min(len(s), need)
+            s = s[drop:]
+            consumed += drop
+            if consumed >= open_tag_len:
+                out += "<think>"
+                prefix_emitted = True
+
+        # 替换首个 </thinking> 为 </think>
+        if prefix_emitted and not close_replaced and s:
+            idx = s.find("</thinking>")
+            if idx != -1:
+                out += s[:idx]
+                out += "</think>"
+                close_replaced = True
+                out += s[idx + len("</thinking>") :]
+                consumed += len(text)
+                return out
+
+        out += s
+        consumed += len(text)
+        return out
+
+    try:
+        async for line in upstream_resp.aiter_lines():
+            # 两处 thinking 已全部处理完，后续行直接透传
+            if prefix_emitted and close_replaced:
+                yield (line + "\n").encode("utf-8")
+                continue
+
+            if not line.startswith("data:"):
+                yield (line + "\n").encode("utf-8")
+                continue
+
+            raw = line[5:].lstrip()
+            if raw.strip() == "[DONE]":
+                yield (line + "\n").encode("utf-8")
+                continue
+
+            try:
+                obj = json.loads(raw)
+            except Exception:
+                # 无法解析 JSON 时直接透传
+                yield (line + "\n").encode("utf-8")
+                continue
+
+            choices = obj.get("choices")
+            if isinstance(choices, list):
+                for choice in choices:
+                    if not isinstance(choice, dict):
+                        continue
+                    delta = choice.get("delta")
+                    if not isinstance(delta, dict):
+                        continue
+                    content = delta.get("content")
+                    if isinstance(content, str):
+                        delta["content"] = patch_content(content)
+
+            out_line = "data: " + json.dumps(obj, ensure_ascii=False)
+            yield (out_line + "\n").encode("utf-8")
+    except httpx.StreamClosed:
+        logger.warning("上游流已关闭，提前结束推流")
+    except Exception:
+        logger.exception("转发流式响应时发生异常")
+        raise
+
+
 def _apply_replacements_to_messages(messages: Any, replacements: Dict[str, str]):
     """对消息列表中的 content 逐条做字符串替换。"""
     return _apply_replacements_to_any(messages, replacements)
@@ -531,7 +620,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
         async def stream_upstream():
             try:
-                async for chunk in _safe_stream(upstream_resp, response_repls):
+                async for chunk in _safe_stream_thinking(upstream_resp):
                     yield chunk
             finally:
                 await upstream_resp.aclose()

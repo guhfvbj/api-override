@@ -232,7 +232,10 @@
         <section class="panel">
           <div class="panel-header">
             <span>模型列表</span>
-            <span class="note">按渠道分组展示上游模型与代理别名，可手动隐藏/删除</span>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button id="unhideModelsBtn" class="secondary">取消隐藏</button>
+              <span class="note">按渠道分组展示上游模型与代理别名，可手动隐藏/删除</span>
+            </div>
           </div>
           <div class="row">
             <label>
@@ -352,6 +355,7 @@
       const refreshModelsBtn = document.getElementById("refreshModelsBtn");
       const reloadConfigBtn = document.getElementById("reloadConfigBtn");
       const modelsChannelFilter = document.getElementById("modelsChannelFilter");
+      const unhideModelsBtn = document.getElementById("unhideModelsBtn");
       const modelsBox = document.getElementById("modelsBox");
       const settingsModelId = document.getElementById("settingsModelId");
       const settingsTargetModel = document.getElementById("settingsTargetModel");
@@ -376,11 +380,10 @@
 
       let modelsCache = [];
       let modelSettings = {}; // { aliasId: { targetModel, channel } }
-      let upstreamChannels = {}; // { name: { base_url, api_key } }
-      let currentBaseModelId = ""; // 当前选中条目的上游模型 ID（alias_for 或自身）
-      let currentEditingModelId = ""; // 打开设置时的别名 ID，用于“重命名”时删除旧 key
-      // 隐藏模型配置（仅前端本地，按“渠道+模型 ID”成对记录）
-      let hiddenModels = new Set();
+      let upstreamChannels = {};
+      let currentBaseModelId = "";
+      let currentEditingModelId = "";
+      let hiddenModels = new Set(); // Set<string> 形如 "channel::modelId"
 
       function log(msg) {
         const now = new Date().toLocaleTimeString();
@@ -442,6 +445,13 @@
         }
       }
 
+      unhideModelsBtn.onclick = () => {
+        hiddenModels = new Set();
+        saveHiddenModels();
+        renderModelList(modelsCache);
+        setStatus("已取消隐藏所有模型。");
+      };
+
       function renderChannels() {
         const entries = Object.entries(upstreamChannels || {});
         if (!entries.length) {
@@ -452,9 +462,7 @@
             .join(" · ");
         }
 
-        // 渠道选择（别名编辑用）
         channelOptions.innerHTML = "";
-        // 渠道筛选（模型列表用）
         modelsChannelFilter.innerHTML = "";
         const allOpt = document.createElement("option");
         allOpt.value = "";
@@ -499,7 +507,6 @@
         upstreamChannels = channelsObj;
         renderChannels();
 
-        // 计算被删除的渠道，在前端同步移除该渠道下的模型（上游 + 别名）
         const removed = Object.keys(oldChannels).filter((name) => !(name in channelsObj));
         if (removed.length) {
           modelsCache = modelsCache.filter((item) => {
@@ -528,6 +535,10 @@
           const ch = (item.metadata && item.metadata.channel) || "默认/未指定";
           const key = `${ch}::${item.id}`;
           if (hiddenModels.has(key)) return;
+
+          const filterCh = currentModelsChannel();
+          if (filterCh && ch !== filterCh) return;
+
           if (!groups[ch]) groups[ch] = [];
           groups[ch].push(item);
         });
@@ -722,24 +733,18 @@
         updateSettingsLine();
         renderConfigPreview();
 
-        // 前端本地更新模型列表中的别名（无需重新拉取）
-        let found = false;
-        modelsCache = modelsCache.filter((item) => {
-          if (!item || typeof item !== "object") return false;
+        // 本地更新列表中的别名信息（若存在）
+        modelsCache = modelsCache.map((item) => {
+          if (!item || typeof item !== "object") return item;
           if (item.owned_by === "proxy-override" && item.id === modelId) {
-            found = true;
-            return false;
+            return {
+              ...item,
+              alias_for: targetModel,
+              metadata: channel ? { channel } : {},
+            };
           }
-          return true;
+          return item;
         });
-        const aliasModel = {
-          id: modelId,
-          object: "model",
-          owned_by: "proxy-override",
-          alias_for: targetModel,
-          metadata: channel ? { channel } : {},
-        };
-        modelsCache.push(aliasModel);
         renderModelList(modelsCache);
 
         try {
@@ -756,10 +761,10 @@
           setStatus(`别名 ${aliasId} 在配置中不存在，无需删除。`);
           return;
         }
+        // 仅清除重命名配置，不隐藏或删除模型列表中的模型
         delete modelSettings[aliasId];
         renderConfigPreview();
 
-        // 清空右侧编辑区（如果当前正在编辑该别名）
         if (settingsModelId.value.trim() === aliasId) {
           settingsModelId.value = "";
           settingsTargetModel.value = "";
@@ -768,12 +773,6 @@
           currentBaseModelId = "";
           updateSettingsLine();
         }
-
-        // 本地从模型列表中移除该别名
-        modelsCache = modelsCache.filter((item) => {
-          return !(item && item.owned_by === "proxy-override" && item.id === aliasId);
-        });
-        renderModelList(modelsCache);
 
         try {
           await persistOverrides();
@@ -806,14 +805,17 @@
         saveEndpointAndKey();
         fetchModels();
       };
+
       reloadConfigBtn.onclick = () => {
         saveEndpointAndKey();
         fetchOverrides();
         fetchChannels();
       };
+
       saveSettingsBtn.onclick = saveSettings;
       newAliasBtn.onclick = newAlias;
       deleteAliasBtn.onclick = deleteAlias;
+
       modelsChannelFilter.onchange = () => {
         // 切换渠道时仅基于已缓存的模型做前端筛选，不触发新的拉取
         renderModelList(modelsCache);
@@ -852,3 +854,4 @@
     </script>
   </body>
 </html>
+

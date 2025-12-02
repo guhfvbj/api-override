@@ -87,7 +87,7 @@
       flex-direction: column;
       gap: 4px;
     }
-    input, textarea {
+    input {
       width: 100%;
       border-radius: 8px;
       border: 1px solid var(--border);
@@ -97,7 +97,7 @@
       padding: 7px 9px;
       outline: none;
     }
-    input:focus, textarea:focus {
+    input:focus {
       border-color: var(--accent);
       box-shadow: 0 0 0 2px rgba(0, 194, 255, 0.2);
     }
@@ -165,7 +165,7 @@
     <header>
       <div class="title">
         <span>newapi OpenAI 代理覆写面板</span>
-        <span class="pill">思考模式 · 重定向</span>
+        <span class="pill">思考模式 · 渠道可选 · 重定向</span>
       </div>
       <div class="row" style="grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.1fr) auto;">
         <label>
@@ -186,8 +186,8 @@
     <div class="layout">
       <section class="panel">
         <div class="panel-header">
-          <span>模型列表（按渠道分组）</span>
-          <span class="note">点击模型即可编辑重定向</span>
+          <span>模型列表（显示渠道）</span>
+          <span class="note">点击模型即可编辑别名 → 目标模型 / 渠道</span>
         </div>
         <div id="modelsBox" class="models-list">
           <div class="note">点击右上角“刷新模型”拉取 /v1/models</div>
@@ -207,15 +207,24 @@
         </div>
         <div class="row">
           <label>
-            目标模型 ID（可选，实际发往上游的模型 ID）
-            <input id="settingsTargetModel" placeholder="留空则使用当前模型 ID" />
+            目标模型 ID（实际发往上游的模型 ID，必填）
+            <input id="settingsTargetModel" placeholder="例如：claude-sonnet-4（必填）" />
+          </label>
+        </div>
+        <div class="row">
+          <label>
+            渠道标识（可选，如使用多渠道上游时填写）
+            <input id="settingsChannel" placeholder="例如：a、b、fox 等；留空则不附加渠道头" />
           </label>
         </div>
         <div class="note">
+          <strong>重定向规则</strong>：客户端用别名（如 <code>claude-sonnet-4-常用</code>），代理把 <code>model</code> 改成你填写的目标模型（如 <code>claude-sonnet-4</code>），并附加可选渠道头 <code>X-Channel</code>（若填写渠道）。
+        </div>
+        <div class="note">
           <strong>Thinking 覆写说明：</strong><br />
-          - 当请求体中带有 <code>thinking.type = "enabled"</code> 且配置 <code>budget_tokens</code> 时，代理会自动追加 antml 思考系统提示词，长度 = <code>budget_tokens × 5</code>；<br />
-          - 流式响应中 <code>&lt;thinking&gt;</code> / <code>&lt;/thinking&gt;</code> 标签将被覆写为 <code>&lt;think&gt;</code> / <code>&lt;/think&gt;</code>；<br />
-          - 未开启 thinking 时，只做模型重定向，不做其它内容替换。
+          - 请求体中 <code>thinking.type = "enabled"</code> 且有 <code>budget_tokens</code> 时，自动追加 antml 思考系统提示词（长度 = <code>budget_tokens × 5</code>）；<br />
+          - 流式响应中的 <code>&lt;thinking&gt;</code> 标签被覆写为 <code>&lt;think&gt;</code>；<br />
+          - 未开启 thinking 时，只做重定向/渠道，不做其它替换。
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;">
           <button id="saveSettingsBtn">保存当前模型设置</button>
@@ -251,6 +260,7 @@
     const modelsBox = document.getElementById('modelsBox');
     const settingsModelId = document.getElementById('settingsModelId');
     const settingsTargetModel = document.getElementById('settingsTargetModel');
+    const settingsChannel = document.getElementById('settingsChannel');
     const saveSettingsBtn = document.getElementById('saveSettingsBtn');
     const configPreview = document.getElementById('configPreview');
     const logBox = document.getElementById('logBox');
@@ -302,12 +312,6 @@
       proxyKeyInput.value = key;
     }
 
-    function getModelChannel(id, item) {
-      // 优先从 /v1/models 元数据读取 channel，找不到则归为“未分组”
-      if (item && item.metadata && item.metadata.channel) return item.metadata.channel;
-      return '未分组';
-    }
-
     function renderModelList(list) {
       modelsBox.textContent = '';
       if (!list || !list.length) {
@@ -315,52 +319,29 @@
         return;
       }
 
-      const groups = {};
       list.forEach((item) => {
         if (!item || typeof item !== 'object') return;
-        const id = item.id;
-        const channel = getModelChannel(id, item);
-        if (!groups[channel]) groups[channel] = [];
-        groups[channel].push(item);
-      });
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'model-item';
+        const isAlias = item.owned_by === 'proxy-override';
+        if (isAlias) btn.classList.add('alias');
+        btn.dataset.modelId = item.id;
 
-      const groupEntries = Object.entries(groups).sort((a, b) => {
-        const [ca] = a;
-        const [cb] = b;
-        if (ca === '未分组') return 1;
-        if (cb === '未分组') return -1;
-        return ca.localeCompare(cb, 'zh-CN');
-      });
+        const main = document.createElement('span');
+        main.textContent = item.id;
 
-      groupEntries.forEach(([channel, items]) => {
-        const header = document.createElement('div');
-        header.className = 'note';
-        header.style.margin = '6px 0 2px';
-        header.textContent = channel === '未分组' ? '未分组' : `渠道：${channel}`;
-        modelsBox.appendChild(header);
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        const metaParts = [];
+        if (item.alias_for) metaParts.push(`→ ${item.alias_for}`);
+        if (item.metadata && item.metadata.channel) metaParts.push(`渠道=${item.metadata.channel}`);
+        meta.textContent = metaParts.join(' · ');
 
-        items.forEach((item) => {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'model-item';
-          const isAlias = item.owned_by === 'proxy-override';
-          if (isAlias) btn.classList.add('alias');
-          btn.dataset.modelId = item.id;
-
-          const main = document.createElement('span');
-          main.textContent = item.id;
-
-          const meta = document.createElement('span');
-          meta.className = 'meta';
-          const metaParts = [];
-          if (item.alias_for) metaParts.push(`→ ${item.alias_for}`);
-          meta.textContent = metaParts.join(' · ');
-
-          btn.appendChild(main);
-          btn.appendChild(meta);
-          btn.onclick = () => openSettings(item.id, item);
-          modelsBox.appendChild(btn);
-        });
+        btn.appendChild(main);
+        btn.appendChild(meta);
+        btn.onclick = () => openSettings(item.id, item);
+        modelsBox.appendChild(btn);
       });
     }
 
@@ -390,14 +371,16 @@
       const targetInfo = cfg.targetModel && cfg.targetModel !== modelId
         ? `重定向到=${cfg.targetModel}`
         : '未配置重定向';
-      currentSettingsLine.textContent = `当前模型：${modelId} · ${targetInfo}`;
+      const channelInfo = cfg.channel ? `渠道=${cfg.channel}` : '渠道未设';
+      currentSettingsLine.textContent = `当前模型：${modelId} · ${targetInfo} · ${channelInfo}`;
     }
 
     function renderConfigPreview() {
       const cfg = {};
       Object.entries(modelSettings).forEach(([id, item]) => {
         cfg[id] = {
-          target_model: item.targetModel || id
+          target_model: item.targetModel || id,
+          channel: item.channel || undefined
         };
       });
       configPreview.value = JSON.stringify(cfg, null, 2);
@@ -412,7 +395,8 @@
         modelSettings = {};
         Object.entries(data || {}).forEach(([mid, cfg]) => {
           modelSettings[mid] = {
-            targetModel: cfg.target_model || mid
+            targetModel: cfg.target_model || mid,
+            channel: cfg.channel || ''
           };
         });
         renderConfigPreview();
@@ -428,7 +412,8 @@
       const payload = {};
       Object.entries(modelSettings).forEach(([mid, item]) => {
         payload[mid] = {
-          target_model: item.targetModel || mid
+          target_model: item.targetModel || mid,
+          channel: item.channel || undefined
         };
       });
       const resp = await fetch(`${endpoint}/overrides`, {
@@ -445,6 +430,7 @@
       settingsModelId.value = modelId;
       const cfg = modelSettings[modelId] || {};
       settingsTargetModel.value = cfg.targetModel || (modelObj && (modelObj.alias_for || modelObj.id)) || modelId;
+      settingsChannel.value = cfg.channel || (modelObj && modelObj.metadata && modelObj.metadata.channel) || '';
       updateSettingsLine();
 
       Array.from(modelsBox.querySelectorAll('.model-item')).forEach((btn) => {
@@ -460,8 +446,14 @@
         return;
       }
       const targetModel = settingsTargetModel.value.trim();
+      const channel = settingsChannel.value.trim();
+      if (!targetModel) {
+        setStatus('请填写目标模型 ID。');
+        return;
+      }
       modelSettings[modelId] = {
-        targetModel
+        targetModel,
+        channel
       };
       updateSettingsLine();
       renderConfigPreview();

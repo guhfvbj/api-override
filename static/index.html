@@ -186,7 +186,7 @@
     <div class="layout">
       <section class="panel">
         <div class="panel-header">
-          <span>模型列表（显示渠道）</span>
+          <span>模型列表</span>
           <span class="note">点击模型即可编辑别名 → 目标模型 / 渠道</span>
         </div>
         <div id="modelsBox" class="models-list">
@@ -213,12 +213,13 @@
         </div>
         <div class="row">
           <label>
-            渠道标识（可选，如使用多渠道上游时填写）
-            <input id="settingsChannel" placeholder="例如：a、b、fox 等；留空则不附加渠道头" />
+            渠道标识（可选，配置后转发时会附加 X-Channel）
+            <input id="settingsChannel" list="channelOptions" placeholder="例如：a / b / fox；留空则不附加渠道头" />
+            <datalist id="channelOptions"></datalist>
           </label>
         </div>
         <div class="note">
-          <strong>重定向规则</strong>：客户端用别名（如 <code>claude-sonnet-4-常用</code>），代理把 <code>model</code> 改成你填写的目标模型（如 <code>claude-sonnet-4</code>），并附加可选渠道头 <code>X-Channel</code>（若填写渠道）。
+          <strong>重定向规则</strong>：客户端用别名（如 <code>claude-sonnet-4-常用</code>），代理把 <code>model</code> 改成目标模型（如 <code>claude-sonnet-4</code>），并可附加渠道头 <code>X-Channel</code>（若设置渠道）。
         </div>
         <div class="note">
           <strong>Thinking 覆写说明：</strong><br />
@@ -231,6 +232,23 @@
         </div>
       </section>
     </div>
+
+    <section class="panel">
+      <div class="panel-header">
+        <span>渠道列表</span>
+        <span class="note">手动添加渠道，或从模型/覆写中汇总</span>
+      </div>
+      <div id="channelList" class="note">暂无渠道</div>
+      <div class="row">
+        <label>
+          新增渠道
+          <input id="newChannelInput" placeholder="例如：a / b / fox" />
+        </label>
+        <div style="display:flex;align-items:flex-end;">
+          <button id="addChannelBtn" class="secondary">添加渠道</button>
+        </div>
+      </div>
+    </section>
 
     <section class="panel">
       <div class="panel-header">
@@ -261,11 +279,15 @@
     const settingsModelId = document.getElementById('settingsModelId');
     const settingsTargetModel = document.getElementById('settingsTargetModel');
     const settingsChannel = document.getElementById('settingsChannel');
+    const channelOptions = document.getElementById('channelOptions');
     const saveSettingsBtn = document.getElementById('saveSettingsBtn');
     const configPreview = document.getElementById('configPreview');
     const logBox = document.getElementById('logBox');
     const statusLine = document.getElementById('statusLine');
     const currentSettingsLine = document.getElementById('currentSettingsLine');
+    const channelList = document.getElementById('channelList');
+    const newChannelInput = document.getElementById('newChannelInput');
+    const addChannelBtn = document.getElementById('addChannelBtn');
 
     const defaultOrigin = window.location.origin.startsWith('http')
       ? window.location.origin
@@ -273,6 +295,7 @@
 
     let modelsCache = [];
     let modelSettings = {};
+    let customChannels = new Set();
 
     function log(msg) {
       const now = new Date().toLocaleTimeString();
@@ -310,6 +333,50 @@
       const key = localStorage.getItem('proxy_key') || '';
       endpointInput.value = ep;
       proxyKeyInput.value = key;
+    }
+
+    function loadCustomChannels() {
+      try {
+        const raw = localStorage.getItem('custom_channels');
+        if (raw) {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) {
+            customChannels = new Set(arr.filter(Boolean));
+          }
+        }
+      } catch (_) {
+        customChannels = new Set();
+      }
+    }
+
+    function saveCustomChannels() {
+      localStorage.setItem('custom_channels', JSON.stringify(Array.from(customChannels)));
+    }
+
+    function collectChannels() {
+      const channels = new Set(customChannels);
+      (modelsCache || []).forEach((item) => {
+        if (item && item.metadata && item.metadata.channel) channels.add(item.metadata.channel);
+      });
+      Object.values(modelSettings || {}).forEach((cfg) => {
+        if (cfg.channel) channels.add(cfg.channel);
+      });
+      return Array.from(channels).filter(Boolean).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    }
+
+    function renderChannels() {
+      const list = collectChannels();
+      if (!list.length) {
+        channelList.textContent = '暂无渠道，可在下方手动添加，或在模型配置中填写渠道后自动汇总。';
+      } else {
+        channelList.textContent = list.join(' · ');
+      }
+      channelOptions.innerHTML = '';
+      list.forEach((c) => {
+        const opt = document.createElement('option');
+        opt.value = c;
+        channelOptions.appendChild(opt);
+      });
     }
 
     function renderModelList(list) {
@@ -354,6 +421,7 @@
         if (!resp.ok) throw new Error(JSON.stringify(data));
         modelsCache = data.data || [];
         renderModelList(modelsCache);
+        renderChannels();
         setStatus('模型列表已更新，点击模型可编辑覆写设置。');
       } catch (err) {
         modelsBox.textContent = '获取失败';
@@ -401,6 +469,7 @@
         });
         renderConfigPreview();
         updateSettingsLine();
+        renderChannels();
         setStatus('覆写配置已同步。');
       } catch (err) {
         setStatus(`获取覆写配置失败：${err}`);
@@ -464,6 +533,11 @@
         return;
       }
       setStatus(`已保存模型 ${modelId} 的覆写设置并同步到服务端。`);
+      if (channel) {
+        customChannels.add(channel);
+        saveCustomChannels();
+        renderChannels();
+      }
     }
 
     refreshModelsBtn.onclick = () => {
@@ -476,10 +550,25 @@
     };
     saveSettingsBtn.onclick = saveSettings;
 
+    addChannelBtn.onclick = () => {
+      const val = newChannelInput.value.trim();
+      if (!val) {
+        setStatus('请输入渠道名称。');
+        return;
+      }
+      customChannels.add(val);
+      saveCustomChannels();
+      newChannelInput.value = '';
+      renderChannels();
+      setStatus(`已添加渠道：${val}`);
+    };
+
     (async function init() {
       hydrateEndpointAndKey();
+      loadCustomChannels();
       await fetchOverrides();
       await fetchModels();
+      renderChannels();
     })();
   </script>
 </body>

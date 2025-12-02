@@ -1,14 +1,20 @@
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 # 加载 .env 环境变量
@@ -22,9 +28,10 @@ STATIC_DIR = BASE_DIR / "static"
 DEFAULT_PORT = int(os.getenv("PORT", 14300))
 OVERRIDE_STORE_PATH = BASE_DIR / "override_store.json"
 
-# 默认上游配置（未指定渠道时使用）
-NEWAPI_BASE_URL = os.getenv("NEWAPI_BASE_URL", "https://api.newapi.ai")
-NEWAPI_API_KEY = os.getenv("NEWAPI_API_KEY")
+# 上游配置（推荐：全部通过 UPSTREAM_CHANNELS 管理）
+NEWAPI_BASE_URL = os.getenv("NEWAPI_BASE_URL") or None
+NEWAPI_API_KEY = os.getenv("NEWAPI_API_KEY") or None
+
 PROXY_API_KEY = os.getenv("PROXY_API_KEY")
 
 # 模型覆写规则（环境变量）
@@ -41,19 +48,13 @@ THINKING_SYSTEM_TEMPLATE = (
 THINKING_LENGTH_MULTIPLIER = 5
 
 
-@dataclass
-class OverrideRule:
-    """模型覆写规则：支持渠道与模型重定向。"""
-
-    # 渠道标识（可选），用于选择上游渠道；为空则使用默认上游
-    channel: Optional[str] = None
-    # 目标模型 ID（实际发往上游的模型），为空则默认为当前别名本身
-    target_model: Optional[str] = None
-
-
 def _strip_trailing_slash(url: str) -> str:
     """去掉末尾斜杠，避免重复拼接路径。"""
     return url[:-1] if url.endswith("/") else url
+
+
+if NEWAPI_BASE_URL:
+    NEWAPI_BASE_URL = _strip_trailing_slash(NEWAPI_BASE_URL)
 
 
 def _log_payload(label: str, payload: Any, limit: int = 2000) -> None:
@@ -68,9 +69,6 @@ def _log_payload(label: str, payload: Any, limit: int = 2000) -> None:
         logger.info("%s: %s", label, text)
     except Exception:
         logger.warning("记录 %s 时失败", label)
-
-
-NEWAPI_BASE_URL = _strip_trailing_slash(NEWAPI_BASE_URL)
 
 
 def _load_upstream_channels_from_env(raw: str = UPSTREAM_CHANNELS_RAW) -> Dict[str, Dict[str, str]]:
@@ -113,7 +111,7 @@ def _persist_upstream_channels_to_env(channels: Dict[str, Dict[str, str]]) -> No
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     line = f"UPSTREAM_CHANNELS={raw}"
 
-    lines: list[str] = []
+    lines: List[str] = []
     if env_path.exists():
         lines = env_path.read_text(encoding="utf-8").splitlines()
         lines = [ln for ln in lines if not ln.startswith("UPSTREAM_CHANNELS=")]
@@ -121,10 +119,18 @@ def _persist_upstream_channels_to_env(channels: Dict[str, Dict[str, str]]) -> No
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+@dataclass
+class OverrideRule:
+    """模型覆写规则：支持渠道与模型重定向。"""
+
+    channel: Optional[str] = None  # 上游渠道标识
+    target_model: Optional[str] = None  # 真实上游模型 ID
+
+
 def _override_from_dict(model_id: str, cfg: Any) -> Optional[OverrideRule]:
     """将任意配置对象转换为 OverrideRule，兼容字符串与字典两种形式。"""
     if isinstance(cfg, str):
-        # 简写： "gpt-4o": "deepseek-chat"
+        # 简写："gpt-4o": "deepseek-chat"
         return OverrideRule(target_model=cfg)
     if not isinstance(cfg, dict):
         logger.warning("不支持的模型覆盖配置 %s: %r", model_id, cfg)
@@ -136,13 +142,12 @@ def _override_from_dict(model_id: str, cfg: Any) -> Optional[OverrideRule]:
 
 
 def _parse_override_map(raw: str) -> Dict[str, OverrideRule]:
-    """解析环境变量中的 JSON 字符串，构造模型覆写规则字典。"""
+    """解析 JSON 字符串，构造模型覆写规则字典。"""
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(raw or "{}")
     except json.JSONDecodeError:
         logger.warning("MODEL_OVERRIDE_MAP 不是合法 JSON，已忽略：%s", raw)
         return {}
-
     if not isinstance(parsed, dict):
         logger.warning("MODEL_OVERRIDE_MAP 应该是对象类型，当前值：%s", parsed)
         return {}
@@ -194,27 +199,110 @@ def _persist_overrides(overrides: Dict[str, OverrideRule]) -> None:
     )
 
 
-def _require_upstream_key() -> None:
-    """确保已配置默认上游 newapi 的鉴权 key。"""
-    if not NEWAPI_API_KEY:
-        raise RuntimeError("未设置 NEWAPI_API_KEY，无法向上游鉴权")
+def _strip_undefined_fields(payload: Any) -> Any:
+    """清理请求体中值为占位 None / '[undefined]' 的字段，避免上游 400。"""
+    placeholder = "[undefined]"
+    if isinstance(payload, list):
+        return [_strip_undefined_fields(item) for item in payload]
+    if isinstance(payload, dict):
+        cleaned: Dict[str, Any] = {}
+        for k, v in payload.items():
+            if v is None:
+                continue
+            if isinstance(v, str) and v.strip() == placeholder:
+                continue
+            cleaned[k] = _strip_undefined_fields(v)
+        return cleaned
+    return payload
 
 
-def _build_default_upstream_headers() -> Dict[str, str]:
-    """构造发往默认上游 newapi 的基础请求头。"""
-    return {
-        "Authorization": f"Bearer {NEWAPI_API_KEY}",
-        "Content-Type": "application/json",
-    }
+def _extract_error(resp: httpx.Response) -> Any:
+    """尽量提取上游错误消息为 JSON 内容。"""
+    try:
+        return resp.json()
+    except Exception:
+        return resp.text
+
+
+def _extract_payload(resp: httpx.Response) -> Any:
+    """尽量把响应解析为 JSON，否则返回文本。"""
+    try:
+        return resp.json()
+    except Exception:
+        return resp.text
+
+
+def _override_map_to_dict(overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
+    """将 OverrideRule 映射转换为可序列化字典。"""
+    result: Dict[str, Any] = {}
+    for mid, rule in (overrides or {}).items():
+        if not isinstance(rule, OverrideRule):
+            continue
+        result[mid] = {
+            "channel": rule.channel,
+            "target_model": rule.target_model,
+        }
+    return result
+
+
+def _augment_models_response(upstream_payload: Any, overrides: Dict[str, OverrideRule]) -> Any:
+    """在 /v1/models 返回值中追加代理定义的模型别名。"""
+    if not isinstance(upstream_payload, dict):
+        upstream_payload = {"object": "list", "data": []}
+    data = upstream_payload.get("data")
+    if not isinstance(data, list):
+        data = []
+
+    known_ids = {item.get("id") for item in data if isinstance(item, dict)}
+    for alias, rule in overrides.items():
+        if alias in known_ids:
+            continue
+        meta: Dict[str, Any] = {}
+        if rule.channel:
+            meta["channel"] = rule.channel
+
+        model_obj: Dict[str, Any] = {
+            "id": alias,
+            "object": "model",
+            "owned_by": "proxy-override",
+            "alias_for": rule.target_model or alias,
+        }
+        if meta:
+            model_obj["metadata"] = meta
+
+        data.append(model_obj)
+
+    upstream_payload["data"] = data
+    return upstream_payload
+
+
+def _build_thinking_system_prefix(max_length: int) -> str:
+    """根据思考长度构造 antml 思考系统前缀。"""
+    return THINKING_SYSTEM_TEMPLATE.format(max_length=max_length)
+
+
+def _inject_thinking_system_prefix(messages: Any, prefix: str) -> Any:
+    """在消息列表中为第一条 system 消息前置指定的思考系统前缀。"""
+    if not isinstance(messages, list) or not prefix:
+        return messages
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("role") == "system":
+            content = msg.get("content")
+            if isinstance(content, str) and not content.startswith(prefix):
+                msg["content"] = prefix + content
+            return messages
+    # 没有 system 消息时，在最前面插入一条
+    return [{"role": "system", "content": prefix}] + messages
 
 
 async def _safe_stream_thinking_v2(upstream_resp: httpx.Response):
-    """基于 SSE JSON 结构，仅针对 thinking 段做覆写。
+    """基于 SSE JSON 结构，仅针对 thinking 段做覆写：
 
-    - 聚合 `choices[].delta.content` 的前 10 个字符（原始 `<thinking>`）全部丢弃，只输出一次 `<think>`；
+    - 聚合 choices[].delta.content 的前 10 个字符（原始 `<thinking>`）全部丢弃，只输出一次 `<think>`；
     - 首次出现 `</thinking>` 替换为 `</think>`；
     - 之后的内容全部原样透传。
     """
+
     open_tag_len = 10  # `<thinking>` 的长度
     dropped = 0  # 已丢弃的前缀字符数（跨 chunk 累积）
     prefix_emitted = False
@@ -296,86 +384,8 @@ async def _safe_stream_thinking_v2(upstream_resp: httpx.Response):
         raise
 
 
-def _build_thinking_system_prefix(max_length: int) -> str:
-    """根据思考长度构造 antml 思考系统前缀。"""
-    return THINKING_SYSTEM_TEMPLATE.format(max_length=max_length)
-
-
-def _inject_thinking_system_prefix(messages: Any, prefix: str):
-    """在消息列表中为第一条 system 消息前置指定的思考系统前缀。"""
-    if not isinstance(messages, list) or not prefix:
-        return messages
-    # 查找第一条 system 消息
-    for msg in messages:
-        if isinstance(msg, dict) and msg.get("role") == "system":
-            content = msg.get("content")
-            if isinstance(content, str) and not content.startswith(prefix):
-                msg["content"] = prefix + content
-            return messages
-    # 没有 system 消息时，在最前面插入一条
-    return [{"role": "system", "content": prefix}] + messages
-
-
-def _strip_undefined_fields(payload: Any):
-    """清理请求体中值为占位或 None 的字段，避免上游 400。"""
-    placeholder = "[undefined]"
-    if isinstance(payload, list):
-        return [_strip_undefined_fields(item) for item in payload]
-    if isinstance(payload, dict):
-        cleaned: Dict[str, Any] = {}
-        for k, v in payload.items():
-            if v is None:
-                continue
-            if isinstance(v, str) and v.strip() == placeholder:
-                continue
-            cleaned[k] = _strip_undefined_fields(v)
-        return cleaned
-    return payload
-
-
-async def verify_proxy_key(
-    authorization: Optional[str] = Header(None),
-    x_api_key: Optional[str] = Header(None),
-) -> None:
-    """校验代理层的 API Key（支持 Authorization / X-Api-Key）。"""
-    if not PROXY_API_KEY:
-        return
-    supplied: Optional[str] = None
-    if authorization and authorization.lower().startswith("bearer "):
-        supplied = authorization.split(" ", 1)[1]
-    if not supplied and x_api_key:
-        supplied = x_api_key
-
-    if supplied != PROXY_API_KEY:
-        raise HTTPException(status_code=401, detail="代理 API Key 不匹配")
-
-
-async def lifespan(app: FastAPI):
-    """启动/关闭生命周期：检测配置并创建共享 HTTP 客户端。"""
-    _require_upstream_key()
-    timeout = httpx.Timeout(None, connect=20.0, read=None, write=None, pool=None)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        app.state.http_client = client
-        persisted = _load_persisted_overrides()
-        app.state.override_map = persisted or override_map
-        # 读取上游渠道配置
-        app.state.upstream_channels = _load_upstream_channels_from_env()
-        logger.info("上游 newapi 默认地址：%s", NEWAPI_BASE_URL)
-        yield
-        logger.info("代理已停止，HTTP 客户端已关闭")
-
-
-app = FastAPI(title="newapi-openai-proxy", lifespan=lifespan)
-
-# 挂载静态目录以提供 Web UI
-if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-else:
-    logger.info("未找到 static 目录，跳过 Web UI 挂载")
-
-
 def _extract_thinking_max_length(payload: Dict[str, Any]) -> Optional[int]:
-    """从请求体中提取思考预算，返回 max_thinking_length（支持顶层 thinking 和 providerOptions.*.thinking）。"""
+    """从请求体中提取思考预算，返回 max_thinking_length。"""
 
     def _from_cfg(thinking_cfg: Any, source: str) -> Optional[int]:
         if not isinstance(thinking_cfg, dict):
@@ -404,13 +414,13 @@ def _extract_thinking_max_length(payload: Dict[str, Any]) -> Optional[int]:
         )
         return max_length
 
-    # 1）优先支持 Cherry Studio 顶层字段：{"thinking": {type,budget_tokens}, ...}
+    # 1）优先支持顶层字段：{"thinking": {type,budget_tokens}, ...}
     top_level = payload.get("thinking")
     max_len = _from_cfg(top_level, "thinking")
     if max_len is not None:
         return max_len
 
-    # 2）兼容旧的 providerOptions.*.thinking 结构
+    # 2）兼容旧版 providerOptions.*.thinking 结构
     provider_options = payload.get("providerOptions")
     if not isinstance(provider_options, dict):
         return None
@@ -438,10 +448,8 @@ def apply_overrides(
     patched = dict(payload)
     model = patched.get("model")
     rule = overrides.get(model)
-    if rule:
-        # 模型别名重定向
-        if rule.target_model:
-            patched["model"] = rule.target_model
+    if rule and rule.target_model:
+        patched["model"] = rule.target_model
 
     # 思考系统前缀：仅当客户端显式开启 thinking 且提供预算时才注入
     if thinking_max_length is not None and thinking_max_length > 0:
@@ -453,64 +461,82 @@ def apply_overrides(
     return patched
 
 
-def _augment_models_response(upstream_payload: Any, overrides: Dict[str, OverrideRule]) -> Any:
-    """在 /v1/models 返回值中追加代理定义的模型别名。"""
-    if not isinstance(upstream_payload, dict):
-        return upstream_payload
-    data = upstream_payload.get("data")
-    if not isinstance(data, list):
-        return upstream_payload
+async def verify_proxy_key(
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+) -> None:
+    """校验代理层的 API Key（支持 Authorization / X-Api-Key）。"""
+    if not PROXY_API_KEY:
+        return
+    supplied: Optional[str] = None
+    if authorization and authorization.lower().startswith("bearer "):
+        supplied = authorization.split(" ", 1)[1]
+    if not supplied and x_api_key:
+        supplied = x_api_key
 
-    known_ids = {item.get("id") for item in data if isinstance(item, dict)}
-    for alias, rule in overrides.items():
-        if alias in known_ids:
+    if supplied != PROXY_API_KEY:
+        raise HTTPException(status_code=401, detail="代理 API Key 不匹配")
+
+
+def _choose_upstream_for_request(
+    rule: Optional[OverrideRule],
+    upstream_channels: Dict[str, Dict[str, str]],
+) -> Tuple[str, str, Optional[str]]:
+    """根据覆写规则和渠道配置选择上游 base_url / api_key / X-Channel 名称。"""
+    # 若规则指定了渠道且配置存在，则优先使用该渠道
+    if rule and rule.channel:
+        cfg = upstream_channels.get(rule.channel)
+        if isinstance(cfg, dict):
+            base_url = cfg.get("base_url")
+            api_key = cfg.get("api_key")
+            if isinstance(base_url, str) and isinstance(api_key, str):
+                return _strip_trailing_slash(base_url), api_key, rule.channel
+
+    # 否则，如果配置了 NEWAPI_*，作为默认上游
+    if NEWAPI_BASE_URL and NEWAPI_API_KEY:
+        return NEWAPI_BASE_URL, NEWAPI_API_KEY, None
+
+    # 再否则，从渠道列表中选择第一个合法渠道
+    for name, cfg in upstream_channels.items():
+        if not isinstance(cfg, dict):
             continue
-        meta: Dict[str, Any] = {}
-        if rule.channel:
-            meta["channel"] = rule.channel
+        base_url = cfg.get("base_url")
+        api_key = cfg.get("api_key")
+        if isinstance(base_url, str) and isinstance(api_key, str):
+            return _strip_trailing_slash(base_url), api_key, name
 
-        model_obj: Dict[str, Any] = {
-            "id": alias,
-            "object": "model",
-            "owned_by": "proxy-override",
-            "alias_for": rule.target_model or alias,
-        }
-        if meta:
-            model_obj["metadata"] = meta
-
-        data.append(model_obj)
-
-    upstream_payload["data"] = data
-    return upstream_payload
+    raise HTTPException(status_code=500, detail="没有可用的上游渠道或 NEWAPI 配置")
 
 
-def _extract_error(resp: httpx.Response) -> Any:
-    """尽量提取上游错误消息为 JSON 内容。"""
-    try:
-        return resp.json()
-    except Exception:
-        return resp.text
+async def lifespan(app: FastAPI):
+    """启动/关闭生命周期：检测配置并创建共享 HTTP 客户端。"""
+    # 启动时加载渠道配置（后续可通过 /channels 更新）
+    app.state.upstream_channels = _load_upstream_channels_from_env()
+
+    # 若既没有 NEWAPI_*，也没有任何渠道，则无法转发请求
+    if not (NEWAPI_BASE_URL and NEWAPI_API_KEY) and not app.state.upstream_channels:
+        raise RuntimeError("未配置 NEWAPI_* 且 UPSTREAM_CHANNELS 为空，无法选择上游")
+
+    timeout = httpx.Timeout(None, connect=20.0, read=None, write=None, pool=None)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        app.state.http_client = client
+
+        # 加载覆写规则：优先本地持久化，其次环境变量
+        persisted = _load_persisted_overrides()
+        app.state.override_map = persisted or override_map
+
+        logger.info("已加载上游渠道：%s", ", ".join(sorted(app.state.upstream_channels.keys())) or "（无）")
+        yield
+        logger.info("代理已停止，HTTP 客户端已关闭")
 
 
-def _extract_payload(resp: httpx.Response) -> Any:
-    """尽量把响应解析为 JSON，否则返回文本。"""
-    try:
-        return resp.json()
-    except Exception:
-        return resp.text
+app = FastAPI(title="newapi-openai-proxy", lifespan=lifespan)
 
-
-def _override_map_to_dict(overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
-    """将 OverrideRule 映射转换为可序列化字典。"""
-    result: Dict[str, Any] = {}
-    for mid, rule in (overrides or {}).items():
-        if not isinstance(rule, OverrideRule):
-            continue
-        result[mid] = {
-            "channel": rule.channel,
-            "target_model": rule.target_model,
-        }
-    return result
+# 挂载静态目录以提供 Web UI
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+else:
+    logger.info("未找到 static 目录，跳过 Web UI 挂载")
 
 
 @app.get("/health")
@@ -529,13 +555,99 @@ async def index() -> HTMLResponse:
 
 
 @app.get("/v1/models")
-async def list_models(_: None = Depends(verify_proxy_key), request: Request = None):
-    """代理转发 /v1/models 请求并追加本地别名。"""
+async def list_models(
+    _: None = Depends(verify_proxy_key),
+    request: Request = None,
+    channel: Optional[str] = Query(None, description="可选：仅拉取指定渠道的模型"),
+) -> JSONResponse:
+    """从各个渠道拉取 /v1/models，聚合后追加本地别名。
+
+    - 若提供 ?channel=<name>，仅从指定渠道拉取模型；
+    - 若未提供 channel，则从所有已配置渠道拉取并聚合；
+    - 若没有任何渠道且配置了 NEWAPI_*，则退回到单一 NEWAPI 上游。
+    """
     client: httpx.AsyncClient = request.app.state.http_client
-    url = f"{NEWAPI_BASE_URL}/v1/models"
-    resp = await client.get(url, headers=_build_default_upstream_headers())
-    payload = _augment_models_response(_extract_payload(resp), request.app.state.override_map)
-    return JSONResponse(content=payload, status_code=resp.status_code)
+    upstream_channels: Dict[str, Dict[str, str]] = getattr(request.app.state, "upstream_channels", {}) or {}
+
+    upstreams: List[Tuple[str, str, Optional[str]]] = []
+
+    if channel:
+        cfg = upstream_channels.get(channel)
+        if not isinstance(cfg, dict):
+            raise HTTPException(status_code=400, detail=f"未知渠道: {channel}")
+        base_url = cfg.get("base_url")
+        api_key = cfg.get("api_key")
+        if not isinstance(base_url, str) or not isinstance(api_key, str):
+            raise HTTPException(status_code=400, detail=f"渠道 {channel} 缺少 base_url 或 api_key")
+        upstreams.append((base_url, api_key, channel))
+    else:
+        # 所有有效渠道
+        for name, cfg in upstream_channels.items():
+            if not isinstance(cfg, dict):
+                continue
+            base_url = cfg.get("base_url")
+            api_key = cfg.get("api_key")
+            if isinstance(base_url, str) and isinstance(api_key, str):
+                upstreams.append((base_url, api_key, name))
+        # 若没有任何渠道，但配置了 NEWAPI_*，则退回到单一 NEWAPI 上游
+        if not upstreams and NEWAPI_BASE_URL and NEWAPI_API_KEY:
+            upstreams.append((NEWAPI_BASE_URL, NEWAPI_API_KEY, None))
+
+    if not upstreams:
+        raise HTTPException(status_code=500, detail="没有可用的上游渠道或 NEWAPI 配置")
+
+    aggregated_models: List[Dict[str, Any]] = []
+    any_success = False
+
+    for base_url, api_key, ch_name in upstreams:
+        url = f"{_strip_trailing_slash(base_url)}/v1/models"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if ch_name:
+            headers["X-Channel"] = ch_name
+        try:
+            resp = await client.get(url, headers=headers)
+        except Exception as exc:
+            logger.warning("拉取渠道 %s 模型失败（网络异常）：%s", ch_name or "default", exc)
+            continue
+
+        if resp.status_code >= 400:
+            logger.warning(
+                "拉取渠道 %s 模型失败，状态码=%s，响应=%s",
+                ch_name or "default",
+                resp.status_code,
+                _extract_error(resp),
+            )
+            continue
+
+        any_success = True
+        payload_any = _extract_payload(resp)
+        if not isinstance(payload_any, dict):
+            continue
+        data = payload_any.get("data")
+        if not isinstance(data, list):
+            continue
+
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            meta = item.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
+            if ch_name:
+                meta["channel"] = ch_name
+            if meta:
+                item["metadata"] = meta
+            aggregated_models.append(item)
+
+    if not any_success:
+        raise HTTPException(status_code=502, detail="从任何上游获取 /v1/models 都失败了")
+
+    payload: Dict[str, Any] = {"object": "list", "data": aggregated_models}
+    payload = _augment_models_response(payload, request.app.state.override_map)
+    return JSONResponse(content=payload, status_code=200)
 
 
 @app.get("/overrides")
@@ -615,25 +727,11 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     if incoming_model != patched_body.get("model"):
         logger.info("模型覆写: %s -> %s", incoming_model, patched_body.get("model"))
 
-    # 3）根据渠道选择上游 base_url 和 api_key
+    # 3）根据渠道选择上游 base_url / api_key
     upstream_channels: Dict[str, Dict[str, str]] = getattr(request.app.state, "upstream_channels", {}) or {}
-    base_url = NEWAPI_BASE_URL
-    api_key = NEWAPI_API_KEY
-    channel_name: Optional[str] = None
-    if rule and rule.channel:
-        channel_name = rule.channel
-        cfg = upstream_channels.get(rule.channel)
-        if isinstance(cfg, dict):
-            if isinstance(cfg.get("base_url"), str):
-                base_url = cfg["base_url"]
-            if isinstance(cfg.get("api_key"), str):
-                api_key = cfg["api_key"]
+    base_url, api_key, channel_name = await _choose_upstream_for_request(rule, upstream_channels)  # type: ignore[arg-type]
 
-    base_url = _strip_trailing_slash(base_url or NEWAPI_BASE_URL)
-    if not api_key:
-        # 如果指定渠道缺少 api_key，仍然退回默认 NEWAPI_API_KEY
-        api_key = NEWAPI_API_KEY
-    url = f"{base_url}/v1/chat/completions"
+    url = f"{_strip_trailing_slash(base_url)}/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -645,7 +743,6 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
     # 4）流式 / 非流式转发
     if is_stream:
-        # 使用显式 send(stream=True) 保证在响应被消费完之前不会关闭上游连接
         request_obj = client.build_request("POST", url, headers=headers, json=cleaned_body)
         upstream_resp = await client.send(request_obj, stream=True)
         if upstream_resp.status_code >= 400:

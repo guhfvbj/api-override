@@ -176,10 +176,10 @@
       </div>
       <div class="note small" style="margin-bottom:8px; padding:8px; border-radius:8px; background:rgba(0,0,0,0.25); border:1px solid var(--border); line-height:1.5;">
         <strong>Thinking 覆写说明：</strong><br />
-        服务端环境变量 <code>THINKING_OVERRIDE_ENABLED=true</code> 时：<br />
-        1）系统提示词最前面会自动追加 antml 思考配置；<br />
+        当请求里带有 Cherry Studio 的 thinking 配置（providerOptions.*.thinking.type=enabled）时：<br />
+        1）系统提示词会自动追加 antml 思考配置（长度 = budget_tokens × 5）；<br />
         2）流式响应中的 <code>&lt;thinking&gt;</code> / <code>&lt;/thinking&gt;</code> 标签会被覆写，便于前端解析。<br />
-        关闭该环境变量则完整透传上游输出。
+        未开启 thinking 时，不做上述处理，直接透传上游输出。
       </div>
       <label>
         模型 ID（只读）

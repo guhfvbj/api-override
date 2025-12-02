@@ -672,7 +672,7 @@ def _override_map_to_dict(overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
 
 
 def _extract_thinking_config(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """??????? Cherry Studio ??????"""
+    """从请求体中解析 Cherry Studio 的思考配置。"""
     cfg = payload.get("providerOptions")
     if not isinstance(cfg, dict):
         return {"enabled": False, "max_length": None}
@@ -683,15 +683,18 @@ def _extract_thinking_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(thinking, dict):
             continue
         t_type = thinking.get("type")
-        # ?? enabled/enable ????
+        # 仅当 type=enabled/enable 时生效
         if t_type not in ("enabled", "enable"):
-            return {"enabled": False, "max_length": None}
+            continue
         budget = thinking.get("budget_tokens")
         try:
             budget_int = int(budget)
+            if budget_int > 0:
+                return {"enabled": True, "max_length": budget_int * 5}
         except (TypeError, ValueError):
-            return {"enabled": True, "max_length": None}
-        return {"enabled": True, "max_length": budget_int * 5}
+            pass
+        # type 合法但预算缺失/无效时，视为未开启，避免误触发覆写
+        return {"enabled": False, "max_length": None}
     return {"enabled": False, "max_length": None}
 
 
@@ -709,15 +712,15 @@ def _inject_system_prefix(messages: Any, prefix: str) -> Any:
 
 
 async def chat_completions(_: None = Depends(verify_proxy_key), request: Request = None):
-    """???? /v1/chat/completions???????? override????? Cherry Studio ?????"""
+    """代理转发 /v1/chat/completions，并在发送前应用 override，同时适配 Cherry Studio 思考配置。"""
     body = await request.json()
 
-    # ?? Cherry Studio ?????
+    # 解析 Cherry Studio 的思考配置
     thinking_cfg = _extract_thinking_config(body)
-    thinking_enabled = bool(thinking_cfg.get("enabled"))
     thinking_max_len = thinking_cfg.get("max_length")
+    thinking_enabled = bool(thinking_cfg.get("enabled") and thinking_max_len)
     thinking_prefix = None
-    if thinking_enabled and thinking_max_len:
+    if thinking_enabled:
         thinking_prefix = (
             f"<antml:thinking_mode>interleaved</antml:thinking_mode>"
             f"<antml:max_thinking_length>{thinking_max_len}</antml:max_thinking_length>"
@@ -725,7 +728,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
     patched_body = apply_overrides(body, request.app.state.override_map)
 
-    # ?????????? thinking ????
+    # 按需为系统提示词追加 thinking 配置前缀
     if thinking_prefix:
         messages = patched_body.get("messages") or []
         if isinstance(messages, list):
@@ -733,19 +736,19 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
     cleaned_body = _strip_undefined_fields(patched_body)
     is_stream = bool(cleaned_body.get("stream"))
-    _log_payload("????", cleaned_body)
+    _log_payload("转发请求", cleaned_body)
     incoming_model = body.get("model")
     rule = request.app.state.override_map.get(incoming_model) or request.app.state.override_map.get(
         patched_body.get("model")
     )
     if incoming_model != patched_body.get("model"):
-        logger.info("????: %s -> %s", incoming_model, patched_body.get("model"))
+        logger.info("模型覆写: %s -> %s", incoming_model, patched_body.get("model"))
 
     client: httpx.AsyncClient = request.app.state.http_client
     url = f"{NEWAPI_BASE_URL}/v1/chat/completions"
     headers = _build_upstream_headers()
 
-    # ?????????????? thinking ?????
+    # 响应内容替换配置
     response_repls: Dict[str, str] = {}
     if rule:
         if rule.response_replacements:
@@ -754,7 +757,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
             response_repls.update(rule.replacements)
 
     if is_stream:
-        # ???? send(stream=True) ???????????????????
+        # 使用显式 send(stream=True) 保证在响应被消费完之前不会关闭上游连接
         request_obj = client.build_request("POST", url, headers=headers, json=cleaned_body)
         upstream_resp = await client.send(request_obj, stream=True)
         if upstream_resp.status_code >= 400:
@@ -790,10 +793,10 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
         raise HTTPException(status_code=resp.status_code, detail=_extract_error(resp))
 
     payload = _extract_payload(resp)
-    _log_payload("????", payload)
+    _log_payload("上游响应", payload)
     if response_repls:
         payload = _apply_replacements_to_any(payload, response_repls)
-        logger.info("??????????=%s????=%s", incoming_model, len(response_repls))
+        logger.info("响应替换已应用，模型=%s，规则数=%s", incoming_model, len(response_repls))
     media_type = resp.headers.get("content-type", "application/json")
     if isinstance(payload, (dict, list)):
         return JSONResponse(content=payload, status_code=resp.status_code, media_type=media_type)

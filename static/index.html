@@ -1,12 +1,9 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>newapi OpenAI 代理覆写面板</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>newapi OpenAI 代理 · 模型覆写控制台</title>
   <style>
     :root {
       --bg: #0e1117;
@@ -15,230 +12,298 @@
       --accent-2: #9d6bff;
       --text: #e6edf3;
       --muted: #9ca3af;
-      --border: #242a32;
+      --border: #30363d;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: 'Space Grotesk', 'Inter', system-ui, -apple-system, sans-serif;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: radial-gradient(circle at 10% 20%, rgba(0, 194, 255, 0.12), transparent 35%),
                   radial-gradient(circle at 80% 0%, rgba(157, 107, 255, 0.18), transparent 35%),
                   var(--bg);
       color: var(--text);
       min-height: 100vh;
-      padding: 32px 16px 24px;
+      padding: 24px 16px;
       display: flex;
       justify-content: center;
     }
-    .hidden { display: none !important; }
-    .login-screen {
-      position: fixed;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: radial-gradient(circle at 20% 20%, rgba(0, 194, 255, 0.12), transparent 35%),
-                  radial-gradient(circle at 70% 10%, rgba(157, 107, 255, 0.15), transparent 35%),
-                  linear-gradient(135deg, #0d1117, #0b0f16);
-      padding: 20px;
-      z-index: 10;
-    }
-    .login-card {
-      width: min(420px, 100%);
-      background: rgba(22, 27, 34, 0.92);
+    .shell {
+      width: min(1180px, 100%);
+      background: rgba(22, 27, 34, 0.95);
+      border-radius: 16px;
       border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 20px 20px 22px;
+      padding: 18px 18px 20px;
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
       display: flex;
       flex-direction: column;
+      gap: 14px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
       gap: 12px;
     }
-    .login-card h2 { margin: 0; font-weight: 600; color: var(--text); }
-    .login-desc { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
-    .login-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
-    .shell {
-      width: min(1180px, 100%);
-      background: linear-gradient(135deg, rgba(22, 27, 34, 0.9), rgba(22, 27, 34, 0.7));
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 20px 20px 24px;
-      backdrop-filter: blur(8px);
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    .title {
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
-    header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
-    .title { font-weight: 600; letter-spacing: 0.5px; display: flex; gap: 10px; align-items: center; color: var(--text); }
-    .pill { padding: 4px 10px; border-radius: 12px; background: rgba(0, 194, 255, 0.12); border: 1px solid rgba(0, 194, 255, 0.3); color: var(--accent); font-size: 12px; }
-    .layout { display: grid; grid-template-columns: 280px 1fr; gap: 12px; }
-    .panel { background: rgba(12, 16, 23, 0.75); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
-    .side-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
-    .models { display: flex; flex-direction: column; gap: 8px; max-height: 560px; overflow: auto; }
-    .model-item { width: 100%; text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: rgba(255,255,255,0.02); color: var(--text); font-size: 14px; cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
-    .model-item:hover { border-color: rgba(0, 194, 255, 0.4); }
-    .model-item.active { border-color: rgba(0, 194, 255, 0.6); background: rgba(0, 194, 255, 0.08); }
-    .row { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-bottom: 12px; }
-    label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
-    input, textarea, select { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: #0c1017; color: var(--text); outline: none; font-size: 14px; transition: border-color 0.2s ease, box-shadow 0.2s ease; }
-    input:focus, textarea:focus, select:focus { border-color: rgba(0, 194, 255, 0.6); box-shadow: 0 0 0 3px rgba(0, 194, 255, 0.12); }
-    textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
-    button { cursor: pointer; border: none; border-radius: 12px; padding: 12px 16px; font-weight: 600; color: #0b0f16; background: linear-gradient(135deg, var(--accent), var(--accent-2)); transition: transform 0.1s ease, box-shadow 0.2s ease; box-shadow: 0 10px 35px rgba(0, 194, 255, 0.25); }
-    button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); box-shadow: none; }
-    button:hover { transform: translateY(-1px); }
-    button:active { transform: translateY(0); }
-    .note { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
-    .status { color: var(--muted); font-size: 13px; margin-top: 6px; min-height: 18px; }
-    .log-box { margin-top: 10px; background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 10px; padding: 10px; min-height: 160px; max-height: 240px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace; font-size: 12px; color: var(--text); }
-    .modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; z-index: 20; }
-    .modal-content { width: min(620px, 100%); background: rgba(22, 27, 34, 0.95); border: 1px solid var(--border); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.45); }
-    .modal-title { font-weight: 600; margin: 0; color: var(--text); }
-    .small { font-size: 12px; }
+    .pill {
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 194, 255, 0.4);
+      background: rgba(0, 194, 255, 0.12);
+      color: var(--accent);
+      font-size: 12px;
+    }
+    .top-row {
+      display: grid;
+      grid-template-columns: minmax(0, 2.1fr) minmax(0, 1.2fr);
+      gap: 10px;
+    }
+    .panel {
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: #0d1117;
+      padding: 12px 12px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    label {
+      font-size: 13px;
+      color: var(--muted);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    input, textarea, select {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #010409;
+      color: var(--text);
+      font-size: 13px;
+      padding: 7px 9px;
+      outline: none;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(0, 194, 255, 0.2);
+    }
+    textarea {
+      resize: vertical;
+      min-height: 80px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      line-height: 1.4;
+    }
+    button {
+      border-radius: 999px;
+      border: none;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: #0b0f16;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(0, 2fr);
+      gap: 10px;
+    }
+    .models-list {
+      max-height: 420px;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .model-item {
+      width: 100%;
+      text-align: left;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0a0f16;
+      color: var(--text);
+      font-size: 13px;
+      padding: 7px 9px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .model-item span.meta {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .model-item.alias {
+      border-color: rgba(0, 194, 255, 0.5);
+      background: rgba(0, 194, 255, 0.08);
+    }
+    .model-item.active {
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+    .row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 8px;
+    }
+    .note {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .log-box {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      background: #010409;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      padding: 6px 8px;
+      max-height: 120px;
+      overflow: auto;
+      color: #9ca3af;
+    }
+    .status-line {
+      font-size: 12px;
+      color: var(--muted);
+    }
   </style>
 </head>
 <body>
-  <div class="login-screen" id="loginScreen">
-    <div class="login-card">
-      <h2>登录 newapi 代理</h2>
-      <p class="login-desc">请输入代理地址和 API Key，登录后解锁覆写管理界面。</p>
-      <label>
-        代理地址（含端口）
-        <input id="loginEndpoint" placeholder="http://localhost:14300" />
-      </label>
-      <label>
-        代理 API Key（PROXY_API_KEY，可留空）
-        <input id="loginKey" placeholder="如果未设置可留空" />
-      </label>
-      <div class="login-actions">
-        <button id="loginBtn">进入覆写台</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="shell hidden" id="appShell">
+  <div class="shell">
     <header>
       <div class="title">
-        <span style="font-size:20px;">newapi 覆写台</span>
-        <span class="pill">仅转发与内容覆写，不带聊天功能</span>
+        <span>newapi OpenAI 代理覆写面板</span>
+        <span class="pill">思考模式 · 渠道 · 重定向</span>
       </div>
-      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-        <button class="secondary" id="logoutBtn">重新登录</button>
-        <button class="secondary" id="getModelsBtn">拉取模型</button>
+      <div class="row" style="grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.1fr) auto;">
+        <label>
+          代理地址
+          <input id="endpoint" placeholder="默认：当前域名或 http://localhost:14300" />
+        </label>
+        <label>
+          代理密钥（PROXY_API_KEY，可选）
+          <input id="proxyKey" placeholder="用于保护代理访问" />
+        </label>
+        <div style="display:flex;align-items:flex-end;gap:6px;">
+          <button id="refreshModelsBtn" class="secondary">刷新模型</button>
+          <button id="reloadConfigBtn" class="secondary">刷新覆写</button>
+        </div>
       </div>
     </header>
 
     <div class="layout">
-      <aside class="panel">
-        <div class="side-header">
-          <span style="color:var(--text); font-weight:600;">模型列表</span>
-          <button class="secondary" style="padding:8px 10px;" id="refreshModelsBtn">刷新</button>
+      <section class="panel">
+        <div class="panel-header">
+          <span>模型列表</span>
+          <span class="note">点击模型即可编辑渠道 / 重定向 / 提示词</span>
         </div>
-        <div class="note small">点击模型打开独立覆写设置（系统提示 / 请求替换 / 响应替换）。</div>
-        <div class="models" id="modelsBox">尚未拉取模型</div>
-      </aside>
-
-      <main class="panel">
-        <div class="row" style="margin-bottom:8px;">
-          <label>
-            当前模型
-            <input id="model" placeholder="点击左侧模型以选择" readonly />
-          </label>
-          <label>
-            代理地址（含端口，右上可重新登录）
-            <input id="endpoint" placeholder="http://localhost:14300" />
-          </label>
-          <label>
-            代理 API Key（PROXY_API_KEY）
-            <input id="proxyKey" placeholder="如果未设置可留空" />
-          </label>
+        <div id="modelsBox" class="models-list">
+          <div class="note">点击右上角“刷新模型”拉取 /v1/models</div>
         </div>
-        <div class="note" id="currentSettingsLine">未选择模型。</div>
+      </section>
 
-        <div class="note">此页面只提供覆写配置与日志，不会发起聊天请求。需要响应覆写请在模型设置中配置。</div>
-
-        <div style="display:grid; grid-template-columns: 1fr; gap:8px; margin-top:10px;">
+      <section class="panel">
+        <div class="panel-header">
+          <span>当前模型设置</span>
+          <span id="currentSettingsLine" class="note">未选择模型</span>
+        </div>
+        <div class="row">
           <label>
-            本地覆写配置预览（可复制到服务端环境变量 MODEL_OVERRIDE_MAP）
-            <textarea id="configPreview" readonly style="min-height:140px; font-family:ui-monospace,Consolas,'Courier New',monospace;"></textarea>
+            模型 ID（来自 /v1/models）
+            <input id="settingsModelId" readonly />
+          </label>
+          <label>
+            渠道标识（可选，用于区分不同上游/来源）
+            <input id="settingsChannel" placeholder="例如：cherry、webui、browser 等" />
           </label>
         </div>
-
-        <div class="note">实时日志</div>
-        <div class="log-box" id="logBox"></div>
-        <div class="status" id="statusLine"></div>
-      </main>
+        <div class="row">
+          <label>
+            目标模型 ID（可选，实际发往上游的模型 ID）
+            <input id="settingsTargetModel" placeholder="留空则使用当前模型 ID" />
+          </label>
+        </div>
+        <label>
+          追加系统提示词（会插入到 messages 最前，用于固定语气 / 语言 / 角色等）
+          <textarea id="settingsSystemPrompt" placeholder="例如：请始终用中文回答，先进行充分思考再输出最终答案。"></textarea>
+        </label>
+        <div class="note">
+          <strong>Thinking 覆写说明：</strong><br />
+          - 当请求体中带有 <code>thinking.type = "enabled"</code> 且配置 <code>budget_tokens</code> 时，代理会自动追加 antml 思考系统提示词，长度 = <code>budget_tokens × 5</code>；<br />
+          - 流式响应中 <code>&lt;thinking&gt;</code> / <code>&lt;/thinking&gt;</code> 标签将被覆写为 <code>&lt;think&gt;</code> / <code>&lt;/think&gt;</code>，便于前端解析；<br />
+          - 未开启 thinking 时，请求与响应只做模型重定向和系统提示词注入，不做其它内容替换。
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;">
+          <button id="saveSettingsBtn">保存当前模型设置</button>
+        </div>
+      </section>
     </div>
-  </div>
 
-  <div class="modal hidden" id="settingsModal">
-    <div class="modal-content">
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-        <h3 class="modal-title">模型覆写设置</h3>
-        <button class="secondary" id="closeSettingsBtn" style="padding:8px 10px;">关闭</button>
+    <section class="panel">
+      <div class="panel-header">
+        <span>覆写配置预览</span>
+        <span class="note">这就是后端 /overrides 接口与环境变量 MODEL_OVERRIDE_MAP 使用的 JSON 结构</span>
       </div>
-      <div class="note small" style="margin-bottom:8px; padding:8px; border-radius:8px; background:rgba(0,0,0,0.25); border:1px solid var(--border); line-height:1.5;">
-        <strong>Thinking 覆写说明：</strong><br />
-        当请求里带有 Cherry Studio 的 thinking 配置（providerOptions.*.thinking.type=enabled）时：<br />
-        1）系统提示词会自动追加 antml 思考配置（长度 = budget_tokens × 5）；<br />
-        2）流式响应中的 <code>&lt;thinking&gt;</code> / <code>&lt;/thinking&gt;</code> 标签会被覆写，便于前端解析。<br />
-        未开启 thinking 时，不做上述处理，直接透传上游输出。
+      <textarea id="configPreview" readonly style="min-height:140px;"></textarea>
+      <div class="note">
+        可将此 JSON 复制到服务端环境变量 <code>MODEL_OVERRIDE_MAP</code> 中，以便在无本地文件时也能恢复配置。
       </div>
-      <label>
-        模型 ID（只读）
-        <input id="settingsModelId" readonly />
-      </label>
-      <label>
-        系统提示词（请求时自动插入到最前）
-        <textarea id="settingsSystemPrompt" placeholder="例如：请始终用中文回答"></textarea>
-      </label>
-      <label>
-        请求内容查找替换（对上游前的 messages.content，行内：原文 => 新文）
-        <textarea id="settingsRequestRepl" placeholder="例如：&#10;敏感词 => 友好词&#10;bad => good"></textarea>
-      </label>
-      <label>
-        响应内容查找替换（对上游返回的文本，行内：原文 => 新文）
-        <textarea id="settingsResponseRepl" placeholder="例如：&#10;内部词 => 外显词&#10;foo => bar"></textarea>
-      </label>
-      <div class="login-actions">
-        <button id="saveSettingsBtn">保存设置</button>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <span>日志</span>
       </div>
-      <div class="note small">请求替换作用于 messages.content；响应替换作用于返回 JSON 的字符串字段。</div>
-    </div>
+      <div id="logBox" class="log-box"></div>
+      <div id="statusLine" class="status-line"></div>
+    </section>
   </div>
 
   <script>
-    const shell = document.getElementById('appShell');
-    const loginScreen = document.getElementById('loginScreen');
-    const loginEndpointInput = document.getElementById('loginEndpoint');
-    const loginKeyInput = document.getElementById('loginKey');
-    const loginBtn = document.getElementById('loginBtn');
-    const logoutBtn = document.getElementById('logoutBtn');
-    const modelsBox = document.getElementById('modelsBox');
     const endpointInput = document.getElementById('endpoint');
     const proxyKeyInput = document.getElementById('proxyKey');
-    const modelInput = document.getElementById('model');
-    const currentSettingsLine = document.getElementById('currentSettingsLine');
-    const settingsModal = document.getElementById('settingsModal');
-    const settingsModelId = document.getElementById('settingsModelId');
-    const settingsSystemPrompt = document.getElementById('settingsSystemPrompt');
-    const settingsRequestRepl = document.getElementById('settingsRequestRepl');
-    const settingsResponseRepl = document.getElementById('settingsResponseRepl');
-    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
-    const closeSettingsBtn = document.getElementById('closeSettingsBtn');
     const refreshModelsBtn = document.getElementById('refreshModelsBtn');
-    const getModelsBtn = document.getElementById('getModelsBtn');
+    const reloadConfigBtn = document.getElementById('reloadConfigBtn');
+    const modelsBox = document.getElementById('modelsBox');
+    const settingsModelId = document.getElementById('settingsModelId');
+    const settingsChannel = document.getElementById('settingsChannel');
+    const settingsTargetModel = document.getElementById('settingsTargetModel');
+    const settingsSystemPrompt = document.getElementById('settingsSystemPrompt');
+    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+    const configPreview = document.getElementById('configPreview');
     const logBox = document.getElementById('logBox');
     const statusLine = document.getElementById('statusLine');
-    const configPreview = document.getElementById('configPreview');
+    const currentSettingsLine = document.getElementById('currentSettingsLine');
 
-    const defaultOrigin = window.location.origin.includes('http') ? window.location.origin : 'http://localhost:14300';
+    const defaultOrigin = window.location.origin.startsWith('http')
+      ? window.location.origin
+      : 'http://localhost:14300';
 
     let modelsCache = [];
     let modelSettings = {};
 
     function log(msg) {
       const now = new Date().toLocaleTimeString();
-      const line = `[${now}] ${msg}`;
       const div = document.createElement('div');
-      div.textContent = line;
+      div.textContent = `[${now}] ${msg}`;
       logBox.appendChild(div);
       logBox.scrollTop = logBox.scrollHeight;
     }
@@ -248,46 +313,63 @@
       if (text) log(text);
     }
 
-    function parsePairs(raw) {
-      const lines = (raw || '').split('\n');
-      const pairs = [];
-      for (const line of lines) {
-        const parts = line.split('=>');
-        if (parts.length >= 2) {
-          const src = parts[0].trim();
-          const dst = parts.slice(1).join('=>').trim();
-          if (src) pairs.push([src, dst]);
-        }
-      }
-      return pairs;
+    function buildHeaders() {
+      const headers = { 'Content-Type': 'application/json' };
+      const key = proxyKeyInput.value.trim() || localStorage.getItem('proxy_key') || '';
+      if (key) headers['Authorization'] = `Bearer ${key}`;
+      return headers;
     }
 
-    function pairsToObject(pairs) {
-      const obj = {};
-      pairs.forEach(([src, dst]) => {
-        if (src) obj[src] = dst ?? '';
-      });
-      return obj;
+    function currentEndpoint() {
+      return (endpointInput.value.trim() || localStorage.getItem('proxy_endpoint') || defaultOrigin);
+    }
+
+    function saveEndpointAndKey() {
+      const ep = endpointInput.value.trim() || defaultOrigin;
+      const key = proxyKeyInput.value.trim();
+      localStorage.setItem('proxy_endpoint', ep);
+      localStorage.setItem('proxy_key', key);
+    }
+
+    function hydrateEndpointAndKey() {
+      const ep = localStorage.getItem('proxy_endpoint') || defaultOrigin;
+      const key = localStorage.getItem('proxy_key') || '';
+      endpointInput.value = ep;
+      proxyKeyInput.value = key;
     }
 
     function renderModelList(list) {
-      if (!Array.isArray(list) || !list.length) {
-        modelsBox.textContent = '未获取到模型';
+      modelsBox.textContent = '';
+      if (!list || !list.length) {
+        modelsBox.textContent = '暂无模型，请确认上游配置是否正确。';
         return;
       }
-      modelsBox.innerHTML = '';
-      list.forEach(item => {
+      list.forEach((item) => {
+        if (!item || typeof item !== 'object') return;
         const btn = document.createElement('button');
-        btn.className = 'model-item' + (item.id === modelInput.value ? ' active' : '');
-        const alias = item.alias_for ? ` → ${item.alias_for}` : '';
-        btn.textContent = `${item.id}${alias}`;
-        btn.onclick = () => openSettings(item.id);
+        btn.type = 'button';
+        btn.className = 'model-item';
+        const isAlias = item.owned_by === 'proxy-override';
+        if (isAlias) btn.classList.add('alias');
+        btn.dataset.modelId = item.id;
+        const main = document.createElement('span');
+        main.textContent = item.id;
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        const metaParts = [];
+        if (item.alias_for) metaParts.push(`→ ${item.alias_for}`);
+        const channel = item.metadata && item.metadata.channel;
+        if (channel) metaParts.push(`渠道=${channel}`);
+        meta.textContent = metaParts.join(' · ');
+        btn.appendChild(main);
+        btn.appendChild(meta);
+        btn.onclick = () => openSettings(item.id, item);
         modelsBox.appendChild(btn);
       });
     }
 
     async function fetchModels() {
-      const endpoint = endpointInput.value.trim() || defaultOrigin;
+      const endpoint = currentEndpoint();
       setStatus('正在拉取模型列表...');
       try {
         const resp = await fetch(`${endpoint}/v1/models`, { headers: buildHeaders() });
@@ -295,103 +377,43 @@
         if (!resp.ok) throw new Error(JSON.stringify(data));
         modelsCache = data.data || [];
         renderModelList(modelsCache);
-        setStatus('模型列表已更新，点击模型可进入覆写设置');
+        setStatus('模型列表已更新，点击模型可编辑覆写设置。');
       } catch (err) {
         modelsBox.textContent = '获取失败';
         setStatus(`拉取模型失败：${err}`);
       }
     }
 
-    function buildHeaders() {
-      const headers = { 'Content-Type': 'application/json' };
-      const key = proxyKeyInput.value.trim();
-      if (key) headers['Authorization'] = `Bearer ${key}`;
-      return headers;
-    }
-
-    function applyCredentials(endpoint, key) {
-      const resolvedEndpoint = endpoint || defaultOrigin;
-      endpointInput.value = resolvedEndpoint;
-      loginEndpointInput.value = resolvedEndpoint;
-      proxyKeyInput.value = key || '';
-      loginKeyInput.value = key || '';
-    }
-
-    function enterApp() {
-      const endpoint = (loginEndpointInput.value.trim() || defaultOrigin);
-      const key = loginKeyInput.value.trim();
-      applyCredentials(endpoint, key);
-      localStorage.setItem('proxy_endpoint', endpoint);
-      localStorage.setItem('proxy_key', key);
-      loginScreen.classList.add('hidden');
-      shell.classList.remove('hidden');
-      setStatus('已登录，可管理覆写规则');
-      fetchOverrides();
-      fetchModels();
-    }
-
-    function showLogin() {
-      shell.classList.add('hidden');
-      loginScreen.classList.remove('hidden');
-      setStatus('已返回登录');
-    }
-
-    async function hydrateFromStorage() {
-      const savedEndpoint = localStorage.getItem('proxy_endpoint');
-      const savedKey = localStorage.getItem('proxy_key');
-      applyCredentials(savedEndpoint || defaultOrigin, savedKey || '');
-      if (savedEndpoint || savedKey) {
-        loginScreen.classList.add('hidden');
-        shell.classList.remove('hidden');
-        setStatus('已从本地读取配置，可直接使用');
-      } else {
-        showLogin();
-      }
-      await fetchOverrides();
-      renderConfigPreview();
-    }
-
-    function openSettings(modelId) {
-      modelInput.value = modelId;
-      const cfg = modelSettings[modelId] || {};
-      settingsModelId.value = modelId;
-      settingsSystemPrompt.value = cfg.systemPrompt || '';
-      settingsRequestRepl.value = cfg.requestText || '';
-      settingsResponseRepl.value = cfg.responseText || '';
-      settingsModal.classList.remove('hidden');
-      updateSettingsLine();
-      setStatus(`已切换到模型 ${modelId}，可编辑覆写设置`);
-    }
-
     function updateSettingsLine() {
-      const model = modelInput.value.trim();
-      if (!model) {
-        currentSettingsLine.textContent = '未选择模型。';
+      const modelId = settingsModelId.value.trim();
+      if (!modelId) {
+        currentSettingsLine.textContent = '未选择模型';
         return;
       }
-      const cfg = modelSettings[model] || {};
+      const cfg = modelSettings[modelId] || {};
+      const channelInfo = cfg.channel ? `渠道=${cfg.channel}` : '渠道未设';
+      const targetInfo = cfg.targetModel && cfg.targetModel !== modelId
+        ? `重定向到=${cfg.targetModel}`
+        : '未配置重定向';
       const promptInfo = cfg.systemPrompt ? '已设系统提示' : '系统提示未设';
-      const reqInfo = cfg.requestPairs && cfg.requestPairs.length ? `请求替换：${cfg.requestPairs.length} 条` : '请求替换未设';
-      const respInfo = cfg.responsePairs && cfg.responsePairs.length ? `响应替换：${cfg.responsePairs.length} 条` : '响应替换未设';
-      currentSettingsLine.textContent = `当前模型：${model} · ${promptInfo} · ${reqInfo} · ${respInfo}`;
+      currentSettingsLine.textContent = `当前模型：${modelId} · ${channelInfo} · ${targetInfo} · ${promptInfo}`;
     }
 
     function renderConfigPreview() {
       const cfg = {};
       Object.entries(modelSettings).forEach(([id, item]) => {
         cfg[id] = {
+          channel: item.channel || undefined,
           target_model: item.targetModel || id,
           prepend_system: item.systemPrompt || undefined,
           force_params: item.forceParams || undefined,
-          replace: item.requestPairs && item.requestPairs.length ? pairsToObject(item.requestPairs) : undefined,
-          replacements: item.responsePairs && item.responsePairs.length ? pairsToObject(item.responsePairs) : undefined
         };
       });
       configPreview.value = JSON.stringify(cfg, null, 2);
     }
 
     async function fetchOverrides() {
-      const endpoint = endpointInput.value.trim() || defaultOrigin;
+      const endpoint = currentEndpoint();
       try {
         const resp = await fetch(`${endpoint}/overrides`, { headers: buildHeaders() });
         const data = await resp.json();
@@ -399,29 +421,28 @@
         modelSettings = {};
         Object.entries(data || {}).forEach(([mid, cfg]) => {
           modelSettings[mid] = {
+            channel: cfg.channel || '',
+            targetModel: cfg.target_model || mid,
             systemPrompt: cfg.prepend_system || '',
-            requestPairs: objToPairs(cfg.replacements || cfg.replace || {}),
-            responsePairs: objToPairs(cfg.response_replacements || cfg.replacements || {}),
-            requestText: pairsToText(objToPairs(cfg.replacements || cfg.replace || {})),
-            responseText: pairsToText(objToPairs(cfg.response_replacements || cfg.replacements || {})),
+            forceParams: cfg.force_params || undefined,
           };
         });
         renderConfigPreview();
         updateSettingsLine();
+        setStatus('覆写配置已同步。');
       } catch (err) {
         setStatus(`获取覆写配置失败：${err}`);
       }
     }
 
     async function persistOverrides() {
-      const endpoint = endpointInput.value.trim() || defaultOrigin;
+      const endpoint = currentEndpoint();
       const payload = {};
       Object.entries(modelSettings).forEach(([mid, item]) => {
         payload[mid] = {
+          channel: item.channel || undefined,
           target_model: item.targetModel || mid,
           prepend_system: item.systemPrompt || undefined,
-          replace: pairsToObject(item.requestPairs || []),
-          response_replacements: pairsToObject(item.responsePairs || []),
           force_params: item.forceParams || undefined,
         };
       });
@@ -432,33 +453,39 @@
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
-      setStatus(`覆写配置已持久化（${data.count} 条）`);
+      setStatus(`覆写配置已持久化（${data.count} 条）。`);
     }
 
-    function objToPairs(obj) {
-      return Object.entries(obj || {}).map(([k, v]) => [k, v]);
-    }
+    function openSettings(modelId, modelObj) {
+      settingsModelId.value = modelId;
+      const cfg = modelSettings[modelId] || {};
+      settingsChannel.value = cfg.channel || (modelObj && modelObj.metadata && modelObj.metadata.channel) || '';
+      settingsTargetModel.value = cfg.targetModel || (modelObj && (modelObj.alias_for || modelObj.id)) || modelId;
+      settingsSystemPrompt.value = cfg.systemPrompt || '';
+      updateSettingsLine();
 
-    function pairsToText(pairs) {
-      return (pairs || []).map(([a, b]) => `${a} => ${b}`).join('\n');
+      // 高亮当前项
+      Array.from(modelsBox.querySelectorAll('.model-item')).forEach((btn) => {
+        if (btn.dataset.modelId === modelId) btn.classList.add('active');
+        else btn.classList.remove('active');
+      });
     }
 
     async function saveSettings() {
       const modelId = settingsModelId.value.trim();
-      if (!modelId) return;
+      if (!modelId) {
+        setStatus('请先选择一个模型。');
+        return;
+      }
+      const channel = settingsChannel.value.trim();
+      const targetModel = settingsTargetModel.value.trim();
       const systemPrompt = settingsSystemPrompt.value.trim();
-      const requestText = settingsRequestRepl.value;
-      const responseText = settingsResponseRepl.value;
-      const requestPairs = parsePairs(requestText);
-      const responsePairs = parsePairs(responseText);
       modelSettings[modelId] = {
+        channel,
+        targetModel,
         systemPrompt,
-        requestText,
-        responseText,
-        requestPairs,
-        responsePairs
+        forceParams: undefined,
       };
-      settingsModal.classList.add('hidden');
       updateSettingsLine();
       renderConfigPreview();
       try {
@@ -467,17 +494,25 @@
         setStatus(`保存覆写到服务端失败：${err}`);
         return;
       }
-      setStatus(`已保存模型 ${modelId} 的覆写设置并同步到服务端`);
+      setStatus(`已保存模型 ${modelId} 的覆写设置并同步到服务端。`);
     }
 
-    loginBtn.onclick = enterApp;
-    logoutBtn.onclick = showLogin;
-    getModelsBtn.onclick = fetchModels;
-    refreshModelsBtn.onclick = fetchModels;
-    closeSettingsBtn.onclick = () => settingsModal.classList.add('hidden');
+    refreshModelsBtn.onclick = () => {
+      saveEndpointAndKey();
+      fetchModels();
+    };
+    reloadConfigBtn.onclick = () => {
+      saveEndpointAndKey();
+      fetchOverrides();
+    };
     saveSettingsBtn.onclick = saveSettings;
 
-    hydrateFromStorage();
+    (async function init() {
+      hydrateEndpointAndKey();
+      await fetchOverrides();
+      await fetchModels();
+    })();
   </script>
 </body>
 </html>
+

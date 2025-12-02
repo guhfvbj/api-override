@@ -22,11 +22,16 @@ STATIC_DIR = BASE_DIR / "static"
 DEFAULT_PORT = int(os.getenv("PORT", 14300))
 OVERRIDE_STORE_PATH = BASE_DIR / "override_store.json"
 
-# 上游 newapi 相关配置
+# 默认上游配置（未指定渠道时使用）
 NEWAPI_BASE_URL = os.getenv("NEWAPI_BASE_URL", "https://api.newapi.ai")
 NEWAPI_API_KEY = os.getenv("NEWAPI_API_KEY")
 PROXY_API_KEY = os.getenv("PROXY_API_KEY")
+
+# 模型覆写规则（环境变量）
 MODEL_OVERRIDE_MAP_RAW = os.getenv("MODEL_OVERRIDE_MAP", "{}")
+
+# 上游多渠道配置（JSON）：{"a":{"base_url":"...","api_key":"..."}, ...}
+UPSTREAM_CHANNELS_RAW = os.getenv("UPSTREAM_CHANNELS", "{}")
 
 # 思考覆写相关配置：由客户端请求体控制开关与预算
 THINKING_SYSTEM_TEMPLATE = (
@@ -38,55 +43,16 @@ THINKING_LENGTH_MULTIPLIER = 5
 
 @dataclass
 class OverrideRule:
-    """模型覆盖规则，支持重定向模型、追加 system、强制参数、请求与响应替换。"""
+    """模型覆写规则：支持渠道与模型重定向。"""
 
+    # 渠道标识（可选），用于选择上游渠道；为空则使用默认上游
+    channel: Optional[str] = None
+    # 目标模型 ID（实际发往上游的模型），为空则默认为当前别名本身
     target_model: Optional[str] = None
-    prepend_system: Optional[str] = None
-    force_params: Dict[str, Any] = field(default_factory=dict)
-    replacements: Dict[str, str] = field(default_factory=dict)
-    response_replacements: Dict[str, str] = field(default_factory=dict)
-
-
-def _parse_override_map(raw: str) -> Dict[str, OverrideRule]:
-    """解析环境变量中的 JSON 字符串，构造成模型覆盖规则字典。"""
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("MODEL_OVERRIDE_MAP 不是合法 JSON，已忽略：%s", raw)
-        return {}
-
-    if not isinstance(parsed, dict):
-        logger.warning("MODEL_OVERRIDE_MAP 应该是对象类型，当前值：%s", parsed)
-        return {}
-
-    result: Dict[str, OverrideRule] = {}
-    for model_id, cfg in parsed.items():
-        if isinstance(cfg, str):
-            # 简写： "gpt-4o": "deepseek-chat"
-            result[model_id] = OverrideRule(target_model=cfg)
-            continue
-
-        if not isinstance(cfg, dict):
-            logger.warning("不支持的模型覆盖配置 %s: %s", model_id, cfg)
-            continue
-
-        result[model_id] = OverrideRule(
-            target_model=cfg.get("target_model") or cfg.get("model") or model_id,
-            prepend_system=cfg.get("prepend_system"),
-            force_params=cfg.get("force_params") or {},
-            replacements=cfg.get("replace") or cfg.get("replacements") or {},
-            response_replacements=cfg.get("response_replace")
-            or cfg.get("response_replacements")
-            or {},
-        )
-    return result
-
-
-override_map = _parse_override_map(MODEL_OVERRIDE_MAP_RAW)
 
 
 def _strip_trailing_slash(url: str) -> str:
-    """去掉末尾的斜杠，避免重复拼接路径。"""
+    """去掉末尾斜杠，避免重复拼接路径。"""
     return url[:-1] if url.endswith("/") else url
 
 
@@ -107,6 +73,91 @@ def _log_payload(label: str, payload: Any, limit: int = 2000) -> None:
 NEWAPI_BASE_URL = _strip_trailing_slash(NEWAPI_BASE_URL)
 
 
+def _load_upstream_channels_from_env(raw: str = UPSTREAM_CHANNELS_RAW) -> Dict[str, Dict[str, str]]:
+    """从环境变量 UPSTREAM_CHANNELS 读取上游渠道配置。"""
+    try:
+        data = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        logger.warning("UPSTREAM_CHANNELS 不是合法 JSON，已忽略：%s", raw)
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("UPSTREAM_CHANNELS 应该是对象类型，当前值：%s", data)
+        return {}
+    result: Dict[str, Dict[str, str]] = {}
+    for name, cfg in data.items():
+        if not isinstance(name, str) or not isinstance(cfg, dict):
+            continue
+        base_url = cfg.get("base_url")
+        api_key = cfg.get("api_key")
+        if not isinstance(base_url, str) or not isinstance(api_key, str):
+            continue
+        result[name] = {
+            "base_url": _strip_trailing_slash(base_url),
+            "api_key": api_key,
+        }
+    return result
+
+
+def _persist_upstream_channels_to_env(channels: Dict[str, Dict[str, str]]) -> None:
+    """写入上游渠道配置到 .env 的 UPSTREAM_CHANNELS，保留其他行。"""
+    env_path = BASE_DIR / ".env"
+    payload: Dict[str, Dict[str, str]] = {}
+    for name, cfg in (channels or {}).items():
+        if not isinstance(name, str) or not isinstance(cfg, dict):
+            continue
+        base_url = cfg.get("base_url")
+        api_key = cfg.get("api_key")
+        if not isinstance(base_url, str) or not isinstance(api_key, str):
+            continue
+        payload[name] = {"base_url": base_url, "api_key": api_key}
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    line = f"UPSTREAM_CHANNELS={raw}"
+
+    lines: list[str] = []
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+        lines = [ln for ln in lines if not ln.startswith("UPSTREAM_CHANNELS=")]
+    lines.append(line)
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _override_from_dict(model_id: str, cfg: Any) -> Optional[OverrideRule]:
+    """将任意配置对象转换为 OverrideRule，兼容字符串与字典两种形式。"""
+    if isinstance(cfg, str):
+        # 简写： "gpt-4o": "deepseek-chat"
+        return OverrideRule(target_model=cfg)
+    if not isinstance(cfg, dict):
+        logger.warning("不支持的模型覆盖配置 %s: %r", model_id, cfg)
+        return None
+    return OverrideRule(
+        channel=cfg.get("channel"),
+        target_model=cfg.get("target_model") or cfg.get("model") or model_id,
+    )
+
+
+def _parse_override_map(raw: str) -> Dict[str, OverrideRule]:
+    """解析环境变量中的 JSON 字符串，构造模型覆写规则字典。"""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("MODEL_OVERRIDE_MAP 不是合法 JSON，已忽略：%s", raw)
+        return {}
+
+    if not isinstance(parsed, dict):
+        logger.warning("MODEL_OVERRIDE_MAP 应该是对象类型，当前值：%s", parsed)
+        return {}
+
+    result: Dict[str, OverrideRule] = {}
+    for model_id, cfg in parsed.items():
+        rule = _override_from_dict(model_id, cfg)
+        if rule:
+            result[model_id] = rule
+    return result
+
+
+override_map: Dict[str, OverrideRule] = _parse_override_map(MODEL_OVERRIDE_MAP_RAW)
+
+
 def _load_persisted_overrides() -> Dict[str, OverrideRule]:
     """从本地持久化文件读取覆写规则。"""
     if not OVERRIDE_STORE_PATH.exists():
@@ -114,23 +165,17 @@ def _load_persisted_overrides() -> Dict[str, OverrideRule]:
     try:
         raw = OVERRIDE_STORE_PATH.read_text(encoding="utf-8")
         data = json.loads(raw)
-        if isinstance(data, dict):
-            return {
-                mid: OverrideRule(
-                    target_model=cfg.get("target_model") or cfg.get("model") or mid,
-                    prepend_system=cfg.get("prepend_system"),
-                    force_params=cfg.get("force_params") or {},
-                    replacements=cfg.get("replace") or cfg.get("replacements") or {},
-                    response_replacements=cfg.get("response_replacements")
-                    or cfg.get("response_replace")
-                    or {},
-                )
-                for mid, cfg in data.items()
-                if isinstance(cfg, dict)
-            }
+        if not isinstance(data, dict):
+            return {}
+        result: Dict[str, OverrideRule] = {}
+        for mid, cfg in data.items():
+            rule = _override_from_dict(mid, cfg)
+            if rule:
+                result[mid] = rule
+        return result
     except Exception as exc:
         logger.warning("读取覆写持久化文件失败：%s", exc)
-    return {}
+        return {}
 
 
 def _persist_overrides(overrides: Dict[str, OverrideRule]) -> None:
@@ -140,11 +185,8 @@ def _persist_overrides(overrides: Dict[str, OverrideRule]) -> None:
         if not isinstance(rule, OverrideRule):
             continue
         serializable[mid] = {
+            "channel": rule.channel,
             "target_model": rule.target_model,
-            "prepend_system": rule.prepend_system,
-            "force_params": rule.force_params,
-            "replacements": rule.replacements,
-            "response_replacements": rule.response_replacements,
         }
     OVERRIDE_STORE_PATH.write_text(
         json.dumps(serializable, ensure_ascii=False, indent=2),
@@ -153,13 +195,13 @@ def _persist_overrides(overrides: Dict[str, OverrideRule]) -> None:
 
 
 def _require_upstream_key() -> None:
-    """确保已配置上游 newapi 的鉴权 key。"""
+    """确保已配置默认上游 newapi 的鉴权 key。"""
     if not NEWAPI_API_KEY:
         raise RuntimeError("未设置 NEWAPI_API_KEY，无法向上游鉴权")
 
 
-def _build_upstream_headers() -> Dict[str, str]:
-    """构造发往上游 newapi 的基础请求头。"""
+def _build_default_upstream_headers() -> Dict[str, str]:
+    """构造发往默认上游 newapi 的基础请求头。"""
     return {
         "Authorization": f"Bearer {NEWAPI_API_KEY}",
         "Content-Type": "application/json",
@@ -274,63 +316,6 @@ def _inject_thinking_system_prefix(messages: Any, prefix: str):
     return [{"role": "system", "content": prefix}] + messages
 
 
-def _apply_replacements_to_any(payload: Any, replacements: Dict[str, str]):
-    """在任意结构中替换字符串，兼容请求与响应。"""
-    if not replacements:
-        return payload
-
-    def replace_text(text: str) -> str:
-        patched = text
-        for src, dst in replacements.items():
-            if src is None or dst is None:
-                continue
-            patched = patched.replace(str(src), str(dst))
-        return patched
-
-    if isinstance(payload, str):
-        return replace_text(payload)
-    if isinstance(payload, list):
-        return [_apply_replacements_to_any(item, replacements) for item in payload]
-    if isinstance(payload, dict):
-        return {k: _apply_replacements_to_any(v, replacements) for k, v in payload.items()}
-    return payload
-
-
-def _apply_replacements_to_messages(messages: Any, replacements: Dict[str, str]):
-    """对消息列表中的 content 逐条做字符串替换。"""
-    return _apply_replacements_to_any(messages, replacements)
-
-
-def _fix_thinking_prefix(payload: Any):
-    """针对 text/字符串前缀出现 <thinking 或 </thinking 的情况做前缀修正。"""
-    if isinstance(payload, str):
-        if payload.startswith("<thinking"):
-            payload = "<think>" + payload[len("<thinking") :]
-        if payload.startswith("</thinking"):
-            payload = "</think>" + payload[len("</thinking") :]
-        return payload
-    if isinstance(payload, list):
-        return [_fix_thinking_prefix(item) for item in payload]
-    if isinstance(payload, dict):
-        return {k: _fix_thinking_prefix(v) for k, v in payload.items()}
-    return payload
-
-
-def _fix_text_prefix(payload: Any):
-    """确保 text 字段前缀 <thinking> 被替换为 <think>，避免首块漏替换。"""
-    if isinstance(payload, dict):
-        patched: Dict[str, Any] = {}
-        for k, v in payload.items():
-            if k == "text" and isinstance(v, str) and v.startswith("<thinking>"):
-                patched[k] = "<think>" + v[len("<thinking>") :]
-            else:
-                patched[k] = _fix_text_prefix(v)
-        return patched
-    if isinstance(payload, list):
-        return [_fix_text_prefix(item) for item in payload]
-    return payload
-
-
 def _strip_undefined_fields(payload: Any):
     """清理请求体中值为占位或 None 的字段，避免上游 400。"""
     placeholder = "[undefined]"
@@ -373,7 +358,9 @@ async def lifespan(app: FastAPI):
         app.state.http_client = client
         persisted = _load_persisted_overrides()
         app.state.override_map = persisted or override_map
-        logger.info("上游 newapi 地址：%s", NEWAPI_BASE_URL)
+        # 读取上游渠道配置
+        app.state.upstream_channels = _load_upstream_channels_from_env()
+        logger.info("上游 newapi 默认地址：%s", NEWAPI_BASE_URL)
         yield
         logger.info("代理已停止，HTTP 客户端已关闭")
 
@@ -444,36 +431,17 @@ def apply_overrides(
     overrides: Dict[str, OverrideRule],
     thinking_max_length: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """根据 override 规则修改模型 ID、追加 system、强制参数与内容替换，并按需注入思考前缀。"""
+    """根据 override 规则修改模型 ID，并按需注入思考前缀。"""
     if not isinstance(payload, dict):
         return payload
 
     patched = dict(payload)
     model = patched.get("model")
     rule = overrides.get(model)
-    if not rule:
-        return patched
-
-    # 模型别名重定向
-    if rule.target_model:
-        patched["model"] = rule.target_model
-
-    # 追加系统提示词
-    if rule.prepend_system:
-        messages = patched.get("messages") or []
-        if isinstance(messages, list):
-            messages = [{"role": "system", "content": rule.prepend_system}] + messages
-        patched["messages"] = messages
-
-    # 强制参数
-    for key, value in (rule.force_params or {}).items():
-        patched[key] = value
-
-    # 请求内容替换
-    if rule.replacements:
-        messages = patched.get("messages")
-        patched["messages"] = _apply_replacements_to_messages(messages, rule.replacements)
-        logger.info("请求替换已应用，模型=%s，规则数=%s", model, len(rule.replacements))
+    if rule:
+        # 模型别名重定向
+        if rule.target_model:
+            patched["model"] = rule.target_model
 
     # 思考系统前缀：仅当客户端显式开启 thinking 且提供预算时才注入
     if thinking_max_length is not None and thinking_max_length > 0:
@@ -497,14 +465,21 @@ def _augment_models_response(upstream_payload: Any, overrides: Dict[str, Overrid
     for alias, rule in overrides.items():
         if alias in known_ids:
             continue
-        data.append(
-            {
-                "id": alias,
-                "object": "model",
-                "owned_by": "proxy-override",
-                "alias_for": rule.target_model or alias,
-            }
-        )
+        meta: Dict[str, Any] = {}
+        if rule.channel:
+            meta["channel"] = rule.channel
+
+        model_obj: Dict[str, Any] = {
+            "id": alias,
+            "object": "model",
+            "owned_by": "proxy-override",
+            "alias_for": rule.target_model or alias,
+        }
+        if meta:
+            model_obj["metadata"] = meta
+
+        data.append(model_obj)
+
     upstream_payload["data"] = data
     return upstream_payload
 
@@ -532,11 +507,8 @@ def _override_map_to_dict(overrides: Dict[str, OverrideRule]) -> Dict[str, Any]:
         if not isinstance(rule, OverrideRule):
             continue
         result[mid] = {
+            "channel": rule.channel,
             "target_model": rule.target_model,
-            "prepend_system": rule.prepend_system,
-            "force_params": rule.force_params,
-            "replacements": rule.replacements,
-            "response_replacements": rule.response_replacements,
         }
     return result
 
@@ -561,7 +533,7 @@ async def list_models(_: None = Depends(verify_proxy_key), request: Request = No
     """代理转发 /v1/models 请求并追加本地别名。"""
     client: httpx.AsyncClient = request.app.state.http_client
     url = f"{NEWAPI_BASE_URL}/v1/models"
-    resp = await client.get(url, headers=_build_upstream_headers())
+    resp = await client.get(url, headers=_build_default_upstream_headers())
     payload = _augment_models_response(_extract_payload(resp), request.app.state.override_map)
     return JSONResponse(content=payload, status_code=resp.status_code)
 
@@ -586,6 +558,43 @@ async def save_overrides(
     return JSONResponse(content={"status": "ok", "count": len(parsed)})
 
 
+@app.get("/channels")
+async def list_channels(_: None = Depends(verify_proxy_key), request: Request = None):
+    """获取上游渠道配置（从内存，已与 .env 同步）。"""
+    channels = getattr(request.app.state, "upstream_channels", {}) or {}
+    return JSONResponse(content={"channels": channels})
+
+
+@app.post("/channels")
+async def save_channels(
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    request: Request = None,
+    _: None = Depends(verify_proxy_key),
+):
+    """保存上游渠道配置到内存与 .env。"""
+    incoming = payload.get("channels") or {}
+    if not isinstance(incoming, dict):
+        raise HTTPException(status_code=400, detail="channels 字段应为对象")
+
+    merged: Dict[str, Dict[str, str]] = {}
+    for name, cfg in incoming.items():
+        if not isinstance(name, str) or not isinstance(cfg, dict):
+            continue
+        base_url = cfg.get("base_url")
+        api_key = cfg.get("api_key")
+        if not isinstance(base_url, str) or not isinstance(api_key, str):
+            continue
+        merged[name] = {
+            "base_url": _strip_trailing_slash(base_url),
+            "api_key": api_key,
+        }
+
+    request.app.state.upstream_channels = merged
+    _persist_upstream_channels_to_env(merged)
+    logger.info("上游渠道配置已更新，渠道数：%s", len(merged))
+    return JSONResponse(content={"status": "ok", "count": len(merged)})
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(_: None = Depends(verify_proxy_key), request: Request = None):
     """代理转发 /v1/chat/completions，并根据客户端思考配置按需应用覆写。"""
@@ -595,31 +604,46 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     thinking_max_length = _extract_thinking_max_length(body)
 
     # 2）按模型覆写规则 + 思考配置修改请求体
-    patched_body = apply_overrides(body, request.app.state.override_map, thinking_max_length)
+    overrides_map: Dict[str, OverrideRule] = request.app.state.override_map
+    patched_body = apply_overrides(body, overrides_map, thinking_max_length)
     cleaned_body = _strip_undefined_fields(patched_body)
     is_stream = bool(cleaned_body.get("stream"))
     _log_payload("转发请求", cleaned_body)
 
     incoming_model = body.get("model")
-    rule = request.app.state.override_map.get(incoming_model) or request.app.state.override_map.get(
-        patched_body.get("model")
-    )
+    rule = overrides_map.get(incoming_model) or overrides_map.get(patched_body.get("model"))
     if incoming_model != patched_body.get("model"):
         logger.info("模型覆写: %s -> %s", incoming_model, patched_body.get("model"))
 
+    # 3）根据渠道选择上游 base_url 和 api_key
+    upstream_channels: Dict[str, Dict[str, str]] = getattr(request.app.state, "upstream_channels", {}) or {}
+    base_url = NEWAPI_BASE_URL
+    api_key = NEWAPI_API_KEY
+    channel_name: Optional[str] = None
+    if rule and rule.channel:
+        channel_name = rule.channel
+        cfg = upstream_channels.get(rule.channel)
+        if isinstance(cfg, dict):
+            if isinstance(cfg.get("base_url"), str):
+                base_url = cfg["base_url"]
+            if isinstance(cfg.get("api_key"), str):
+                api_key = cfg["api_key"]
+
+    base_url = _strip_trailing_slash(base_url or NEWAPI_BASE_URL)
+    if not api_key:
+        # 如果指定渠道缺少 api_key，仍然退回默认 NEWAPI_API_KEY
+        api_key = NEWAPI_API_KEY
+    url = f"{base_url}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if channel_name:
+        headers["X-Channel"] = channel_name
+
     client: httpx.AsyncClient = request.app.state.http_client
-    url = f"{NEWAPI_BASE_URL}/v1/chat/completions"
-    headers = _build_upstream_headers()
 
-    # 响应内容替换规则（与思考开关独立）
-    response_repls: Dict[str, str] = {}
-    if rule:
-        if rule.response_replacements:
-            response_repls.update(rule.response_replacements)
-        if rule.replacements:
-            response_repls.update(rule.replacements)
-
-    # 3）流式 / 非流式转发
+    # 4）流式 / 非流式转发
     if is_stream:
         # 使用显式 send(stream=True) 保证在响应被消费完之前不会关闭上游连接
         request_obj = client.build_request("POST", url, headers=headers, json=cleaned_body)
@@ -658,10 +682,6 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     payload = _extract_payload(resp)
     _log_payload("上游响应", payload)
 
-    if response_repls:
-        payload = _apply_replacements_to_any(payload, response_repls)
-        logger.info("响应替换已应用，模型=%s，规则数=%s", incoming_model, len(response_repls))
-
     media_type = resp.headers.get("content-type", "application/json")
     if isinstance(payload, (dict, list)):
         return JSONResponse(content=payload, status_code=resp.status_code, media_type=media_type)
@@ -672,3 +692,4 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=DEFAULT_PORT, reload=False)
+

@@ -715,7 +715,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     """代理转发 /v1/chat/completions，并在发送前应用 override，同时适配 Cherry Studio 思考配置。"""
     body = await request.json()
 
-    # 解析 Cherry Studio 的思考配置
+    # 解析 Cherry Studio 的思考配置（仅用于注入系统提示，不干扰基础流式逻辑）
     thinking_cfg = _extract_thinking_config(body)
     thinking_max_len = thinking_cfg.get("max_length")
     thinking_enabled = bool(thinking_cfg.get("enabled") and thinking_max_len)
@@ -770,10 +770,9 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
         async def stream_upstream():
             try:
-                if thinking_enabled:
-                    async for chunk in _safe_stream_thinking_v2(upstream_resp):
-                        yield chunk
-                elif response_repls:
+                # 为避免影响正常输出，这里仅在存在通用响应替换配置时使用 _safe_stream，
+                # 否则完全透传上游 SSE 内容
+                if response_repls:
                     async for chunk in _safe_stream(upstream_resp, response_repls):
                         yield chunk
                 else:

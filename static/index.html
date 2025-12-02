@@ -733,22 +733,10 @@
         updateSettingsLine();
         renderConfigPreview();
 
-        // 本地更新列表中的别名信息（若存在）
-        modelsCache = modelsCache.map((item) => {
-          if (!item || typeof item !== "object") return item;
-          if (item.owned_by === "proxy-override" && item.id === modelId) {
-            return {
-              ...item,
-              alias_for: targetModel,
-              metadata: channel ? { channel } : {},
-            };
-          }
-          return item;
-        });
-        renderModelList(modelsCache);
-
         try {
           await persistOverrides();
+          // 从后端重新拉取模型列表，保证新建/修改的别名立即在 UI 中显示
+          await fetchModels();
         } catch (err) {
           setStatus(`保存覆写到服务端失败：${err}`);
           return;
@@ -776,6 +764,8 @@
 
         try {
           await persistOverrides();
+          // 删除后重新拉取模型列表，确保 UI 与后端配置同步（别名从列表中消失）
+          await fetchModels();
         } catch (err) {
           setStatus(`删除别名失败：${err}`);
           return;
@@ -852,6 +842,138 @@
         await fetchModels();
       })();
     </script>
+    <script>
+      // 覆盖部分前端行为：
+      // 1）隐藏“新建别名”按钮；
+      // 2）仅在模型列表中展示上游模型，并在行内标记别名；
+      // 3）打开设置时，从上游模型反查当前渠道下的别名。
+      (function () {
+        // 隐藏“新建别名”按钮（不再提供该选项）
+        const newAliasBtnEl = document.getElementById("newAliasBtn");
+        if (newAliasBtnEl && newAliasBtnEl.parentElement) {
+          newAliasBtnEl.parentElement.removeChild(newAliasBtnEl);
+        }
+
+        // 重写模型列表渲染逻辑
+        window.renderModelList = function (list) {
+          modelsBox.textContent = "";
+          if (!list || !list.length) {
+            modelsBox.textContent = "暂无模型，请确认上游配置是否正确";
+            return;
+          }
+
+          const groups = {};
+          (list || []).forEach((item) => {
+            if (!item || typeof item !== "object") return;
+            // 列表中仅展示上游模型，不单独展示代理生成的别名模型
+            if (item.owned_by === "proxy-override") return;
+            const ch = (item.metadata && item.metadata.channel) || "默认/未指定";
+            const key = `${ch}::${item.id}`;
+            if (hiddenModels.has(key)) return;
+
+            const filterCh = currentModelsChannel();
+            if (filterCh && ch !== filterCh) return;
+
+            if (!groups[ch]) groups[ch] = [];
+            groups[ch].push(item);
+          });
+
+          Object.entries(groups).forEach(([ch, items]) => {
+            const header = document.createElement("div");
+            header.className = "note";
+            header.textContent = `渠道：${ch}`;
+            modelsBox.appendChild(header);
+
+            items.forEach((item) => {
+              const row = document.createElement("div");
+              row.className = "model-row";
+
+              const btn = document.createElement("button");
+              btn.type = "button";
+              btn.className = "model-item";
+              btn.dataset.modelId = item.id;
+
+              const main = document.createElement("span");
+              main.textContent = item.id;
+
+              const meta = document.createElement("span");
+              meta.className = "meta";
+              const metaParts = [];
+
+              // 渠道信息
+              const chName = item.metadata && item.metadata.channel;
+              if (chName) {
+                metaParts.push(`渠道=${chName}`);
+              }
+
+              // 别名信息：从当前覆写配置中反查哪些别名指向该模型
+              const aliasNames = [];
+              Object.entries(modelSettings || {}).forEach(([aliasId, cfg]) => {
+                if (!cfg || typeof cfg !== "object") return;
+                if (cfg.targetModel === item.id && cfg.channel === ch) {
+                  aliasNames.push(aliasId);
+                }
+              });
+              if (aliasNames.length) {
+                metaParts.push(`别名=${aliasNames.join(", ")}`);
+              }
+
+              meta.textContent = metaParts.join(" · ");
+
+              btn.appendChild(main);
+              btn.appendChild(meta);
+              btn.onclick = () => openSettings(item.id, item);
+              row.appendChild(btn);
+
+              const delBtn = document.createElement("button");
+              delBtn.type = "button";
+              delBtn.className = "danger";
+              delBtn.textContent = "隐藏";
+              delBtn.onclick = (ev) => {
+                ev.stopPropagation();
+                const key = `${ch}::${item.id}`;
+                hiddenModels.add(key);
+                saveHiddenModels();
+                renderModelList(modelsCache);
+                setStatus(`已从列表隐藏模型 ${item.id}（渠道 ${ch}）`);
+              };
+              row.appendChild(delBtn);
+
+              modelsBox.appendChild(row);
+            });
+          });
+        };
+
+        // 重写打开设置的逻辑：基于上游模型查找当前渠道下的别名
+        window.openSettings = function (modelId, modelObj) {
+          currentBaseModelId = (modelObj && (modelObj.alias_for || modelObj.id)) || "";
+          const chName = (modelObj && modelObj.metadata && modelObj.metadata.channel) || "";
+
+          let aliasId = "";
+          let aliasCfg = null;
+          Object.entries(modelSettings || {}).some(([mid, cfg]) => {
+            if (!cfg || typeof cfg !== "object") return false;
+            if (cfg.targetModel === currentBaseModelId && cfg.channel === chName) {
+              aliasId = mid;
+              aliasCfg = cfg;
+              return true;
+            }
+            return false;
+          });
+
+          currentEditingModelId = aliasId;
+          settingsModelId.value = aliasId;
+          settingsTargetModel.value =
+            (aliasCfg && aliasCfg.targetModel) || currentBaseModelId || modelId;
+          settingsChannel.value = (aliasCfg && aliasCfg.channel) || chName;
+          updateSettingsLine();
+
+          Array.from(modelsBox.querySelectorAll(".model-item")).forEach((btn) => {
+            if (btn.dataset.modelId === modelId) btn.classList.add("active");
+            else btn.classList.remove("active");
+          });
+        };
+      })();
+    </script>
   </body>
 </html>
-

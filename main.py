@@ -184,33 +184,37 @@ async def _safe_stream(upstream_resp: httpx.Response, replacements: Optional[Dic
 
             buffer += piece
 
-            # 步骤 1：前 10 字符强制覆写为 <think>
+            # 步骤 1：确保首 10 字符被替换并立即输出 <think>
             if not prefix_done and len(buffer) >= prefix_len:
-                buffer = open_repl + buffer[prefix_len:]
+                buffer = buffer[prefix_len:]  # 丢弃原始前 10 字符
+                yield open_repl.encode("utf-8")
                 prefix_done = True
 
             # 步骤 2：查找并替换首个 </thinking>
             if prefix_done and not close_done:
-                idx = buffer.find(close_tag)
-                if idx != -1:
-                    before = buffer[:idx]
-                    if before:
-                        yield before.encode("utf-8")
-                    yield close_repl.encode("utf-8")
-                    close_done = True
-                    # </thinking> 之后的内容立即透传
-                    buffer = buffer[idx + close_tag_len :]
-                    if buffer:
-                        yield buffer.encode("utf-8")
-                    buffer = ""
-                    continue
-                else:
-                    # 为避免无限累计，把不可能组成标签的前半部分先吐出
-                    if len(buffer) > close_tag_len - 1:
-                        safe_len = len(buffer) - (close_tag_len - 1)
-                        emit, buffer = buffer[:safe_len], buffer[safe_len:]
-                        if emit:
-                            yield emit.encode("utf-8")
+                while True:
+                    idx = buffer.find(close_tag)
+                    if idx != -1:
+                        # 输出关闭标签前的内容
+                        if idx > 0:
+                            yield buffer[:idx].encode("utf-8")
+                        # 输出替换后的 </thinking>
+                        yield close_repl.encode("utf-8")
+                        close_done = True
+                        # 关闭标签之后的内容可直接透传
+                        buffer = buffer[idx + close_tag_len :]
+                        if buffer:
+                            yield buffer.encode("utf-8")
+                        buffer = ""
+                        break
+
+                    # 未找到关闭标签，为避免缓冲过大，仅保留可能构成标签的尾部
+                    keep = close_tag_len - 1
+                    if len(buffer) > keep:
+                        emit_len = len(buffer) - keep
+                        yield buffer[:emit_len].encode("utf-8")
+                        buffer = buffer[emit_len:]
+                    break
 
         # 结束时如果还有残留且未完成关闭标签替换，直接输出剩余内容
         if buffer and not close_done:

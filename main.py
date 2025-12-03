@@ -450,6 +450,56 @@ def _extract_thinking_max_length(payload: Dict[str, Any]) -> Optional[int]:
     return None
 
 
+def _extract_thinking_max_length_v2(payload: Dict[str, Any]) -> Optional[int]:
+    """新版：只要在 thinking/think 字段下看到正的 budget_tokens 就启用思考模式。"""
+
+    def _from_cfg_v2(thinking_cfg: Any, source: str) -> Optional[int]:
+        if not isinstance(thinking_cfg, dict):
+            return None
+        budget = thinking_cfg.get("budget_tokens")
+        try:
+            budget_val = int(budget)
+        except (TypeError, ValueError):
+            logger.warning("thinking/think 配置 budget_tokens 非法: %r（source=%s）", budget, source)
+            return None
+        if budget_val <= 0:
+            return None
+        max_length = budget_val
+        logger.info(
+            "检测到 thinking/think 启用：source=%s, budget_tokens=%s, max_length=%s",
+            source,
+            budget_val,
+            max_length,
+        )
+        return max_length
+
+    # 1）顶层字段：thinking 或 think
+    for key in ("thinking", "think"):
+        top_level = payload.get(key)
+        max_len = _from_cfg_v2(top_level, key)
+        if max_len is not None:
+            return max_len
+
+    # 2）兼容 providerOptions.*.(thinking|think)
+    provider_options = payload.get("providerOptions")
+    if isinstance(provider_options, dict):
+        for provider_id, provider_cfg in provider_options.items():
+            if not isinstance(provider_cfg, dict):
+                continue
+            for key in ("thinking", "think"):
+                thinking_cfg = provider_cfg.get(key)
+                max_len = _from_cfg_v2(
+                    thinking_cfg, f"providerOptions[{provider_id}].{key}"
+                )
+                if max_len is not None:
+                    return max_len
+
+    return None
+
+
+_extract_thinking_max_length = _extract_thinking_max_length_v2
+
+
 def apply_overrides(
     payload: Dict[str, Any],
     overrides: Dict[str, OverrideRule],
@@ -834,4 +884,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=DEFAULT_PORT, reload=False)
-

@@ -33,7 +33,11 @@ from overrides import (
     parse_override_map,
     persist_overrides,
 )
-from thinking import extract_thinking_max_length, safe_stream_thinking
+from thinking import (
+    extract_thinking_max_length,
+    normalize_thinking_model_name,
+    safe_stream_thinking,
+)
 from utils import (
     extract_error,
     extract_payload,
@@ -41,6 +45,9 @@ from utils import (
     strip_trailing_slash,
     strip_undefined_fields,
 )
+
+# 带 -thinking/-think 后缀强制思考模式时的默认预算
+FORCED_THINKING_DEFAULT_BUDGET = 16000
 
 
 async def verify_proxy_key(
@@ -313,8 +320,18 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     """代理转发 /v1/chat/completions，并根据客户端思考配置按需应用覆写。"""
     body = await request.json()
 
-    # 1）从客户端请求体中提取 thinking 配置（是否启用 + 预算）
-    thinking_max_length = extract_thinking_max_length(body)
+    # 0）规范化模型名：支持通过模型后缀 -thinking/-think 强制启用思考模式
+    raw_model = body.get("model")
+    normalized_model, force_thinking = normalize_thinking_model_name(raw_model)
+    if force_thinking and normalized_model:
+        body["model"] = normalized_model
+
+    # 1）若通过模型后缀强制启用思考，则忽略请求体中的 thinking 配置，直接使用默认预算；
+    #    否则按照请求体的 thinking/think 字段解析预算。
+    if force_thinking:
+        thinking_max_length = FORCED_THINKING_DEFAULT_BUDGET
+    else:
+        thinking_max_length = extract_thinking_max_length(body)
 
     # 2）按模型覆写规则 + 思考配置修改请求体
     overrides_map: Dict[str, OverrideRule] = request.app.state.override_map
@@ -325,8 +342,10 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
     incoming_model = body.get("model")
     rule = overrides_map.get(incoming_model) or overrides_map.get(patched_body.get("model"))
-    if incoming_model != patched_body.get("model"):
-        logger.info("模型覆写: %s -> %s", incoming_model, patched_body.get("model"))
+    # 日志中保留原始模型名，便于排查是否通过 -thinking/-think 触发
+    log_from = raw_model if raw_model is not None else incoming_model
+    if log_from != patched_body.get("model"):
+        logger.info("模型覆写: %s -> %s", log_from, patched_body.get("model"))
 
     # 3）根据渠道选择上游 base_url / api_key
     upstream_channels: Dict[str, Dict[str, str]] = getattr(request.app.state, "upstream_channels", {}) or {}
@@ -356,7 +375,7 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
 
         async def stream_upstream():
             try:
-                # 仅当客户端显式提供思考预算时，才对 <thinking> 标签进行覆写；否则完全透传
+                # 启用思考模式时，对 <thinking> 标签进行覆写；否则完全透传
                 if thinking_max_length is not None:
                     async for chunk in safe_stream_thinking(upstream_resp):
                         yield chunk
@@ -390,4 +409,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=DEFAULT_PORT, reload=False)
-

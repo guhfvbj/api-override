@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
@@ -160,4 +160,26 @@ def extract_thinking_max_length(payload: Dict[str, Any]) -> Optional[int]:
                     return max_len
 
     return None
+
+
+def normalize_thinking_model_name(model: Optional[str]) -> Tuple[Optional[str], bool]:
+    """规范化带 thinking/think 后缀的模型名。
+
+    - 若模型名以 `-thinking` 或 `-think` 结尾，则去掉后缀和尾部多余短横线，返回（基础名, True）；
+    - 否则返回（原始名, False）。
+    """
+    if not isinstance(model, str):
+        return model, False
+
+    lower = model.lower()
+    for suffix in ("-thinking", "-think"):
+        if lower.endswith(suffix):
+            base = model[: -len(suffix)]
+            # 兼容形如 "...-thinking" 的写法，去掉多余短横线
+            base = base.rstrip("-")
+            if not base:
+                return model, False
+            return base, True
+
+    return model, False
 

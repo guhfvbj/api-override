@@ -368,8 +368,13 @@ async def save_custom_models(
         for it in items:
             mid = it.get("id")
             alias_for = it.get("alias_for")
-            if mid and alias_for:
-                new_overrides[mid] = OverrideRule(channel=ch, target_model=alias_for)
+            if mid:
+                # 如果有 alias_for，则映射到 alias_for；否则保持原名
+                target = alias_for if alias_for else mid
+                # 只要该模型归属于某个渠道（ch），或者有别名定义，就建立路由规则
+                # 注意：如果 ch 为空且没有 alias_for，则不建立规则（走默认路由）
+                if ch or alias_for:
+                    new_overrides[mid] = OverrideRule(channel=ch, target_model=target)
     
     request.app.state.override_map = new_overrides
     persist_overrides(new_overrides)

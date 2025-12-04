@@ -25,6 +25,10 @@ from config import (
     STATIC_DIR,
     logger,
 )
+from custom_models import (
+    load_initial_custom_models,
+    persist_custom_models,
+)
 from overrides import (
     OverrideRule,
     apply_overrides,
@@ -71,6 +75,8 @@ async def lifespan(app: FastAPI):
     """应用生命周期：初始化 HTTP 客户端和内存配置。"""
     # 启动时从环境变量加载上游渠道配置（可通过 /channels 更新）
     app.state.upstream_channels = load_upstream_channels_from_env()
+    # 加载自定义模型列表（优先持久化文件，其次环境变量）
+    app.state.custom_models = load_initial_custom_models()
 
     timeout = httpx.Timeout(None, connect=20.0, read=None, write=None, pool=None)
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -229,6 +235,22 @@ async def list_models(
     if not any_success:
         raise HTTPException(status_code=502, detail="从任何上游获取 /v1/models 都失败了")
 
+    # 追加持久化自定义模型
+    custom_models: Dict[str, List[Dict[str, Any]]] = getattr(request.app.state, "custom_models", {}) or {}
+    for ch_name, models in (custom_models.items() if isinstance(custom_models, dict) else []):
+        for m in models:
+            if not isinstance(m, dict):
+                continue
+            model_copy = dict(m)
+            meta = model_copy.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
+            if ch_name:
+                meta["channel"] = ch_name
+            if meta:
+                model_copy["metadata"] = meta
+            aggregated_models.append(model_copy)
+
     # 聚合上游模型 + 本地别名
     payload: Dict[str, Any] = {"object": "list", "data": aggregated_models}
     payload = _augment_models_response(payload, request.app.state.override_map)
@@ -313,6 +335,55 @@ async def save_channels(
 
     logger.info("上游渠道配置已更新，渠道数：%s", len(merged))
     return JSONResponse(content={"status": "ok", "count": len(merged)})
+
+
+@app.get("/custom-models")
+async def get_custom_models(_: None = Depends(verify_proxy_key), request: Request = None):
+    """获取持久化的自定义模型列表（按渠道分组）。"""
+    models = getattr(request.app.state, "custom_models", {}) or {}
+    return JSONResponse(content=models)
+
+
+@app.post("/custom-models")
+async def save_custom_models(
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    request: Request = None,
+    _: None = Depends(verify_proxy_key),
+):
+    """替换并持久化自定义模型列表（按渠道分组）。"""
+    incoming: Dict[str, List[Dict[str, Any]]] = {}
+    if isinstance(payload, dict):
+        for ch, items in payload.items():
+            if not isinstance(items, list):
+                continue
+            normalized: List[Dict[str, Any]] = []
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                mid = it.get("id")
+                if not isinstance(mid, str) or not mid.strip():
+                    continue
+                model_obj = {
+                    "id": mid.strip(),
+                    "object": it.get("object") or "model",
+                    "owned_by": it.get("owned_by") or "local",
+                }
+                alias_for = it.get("alias_for")
+                if isinstance(alias_for, str) and alias_for.strip():
+                    model_obj["alias_for"] = alias_for.strip()
+                meta = it.get("metadata") if isinstance(it.get("metadata"), dict) else {}
+                if isinstance(ch, str) and ch:
+                    meta["channel"] = ch
+                if meta:
+                    model_obj["metadata"] = meta
+                normalized.append(model_obj)
+            if normalized:
+                incoming[ch if isinstance(ch, str) else ""] = normalized
+
+    request.app.state.custom_models = incoming
+    persist_custom_models(incoming)
+    logger.info("自定义模型列表已更新：%s", sum(len(v) for v in incoming.values()))
+    return JSONResponse(content={"status": "ok", "count": sum(len(v) for v in incoming.values())})
 
 
 @app.post("/v1/chat/completions")

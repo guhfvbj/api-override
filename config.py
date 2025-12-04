@@ -20,6 +20,8 @@ DEFAULT_PORT = int(os.getenv("PORT", 14300))
 OVERRIDE_STORE_PATH = BASE_DIR / "override_store.json"
 # 自定义模型持久化文件路径
 CUSTOM_MODELS_PATH = BASE_DIR / "custom_models.json"
+# 统一模型/别名持久化文件路径
+MODEL_STORE_PATH = BASE_DIR / "model_store.json"
 
 # 上游 newapi 默认配置（可选）
 NEWAPI_BASE_URL = os.getenv("NEWAPI_BASE_URL") or None
@@ -33,6 +35,8 @@ MODEL_OVERRIDE_MAP_RAW = os.getenv("MODEL_OVERRIDE_MAP", "{}")
 UPSTREAM_CHANNELS_RAW = os.getenv("UPSTREAM_CHANNELS", "{}")
 # 环境变量中的自定义模型列表
 CUSTOM_MODELS_RAW = os.getenv("CUSTOM_MODELS", "{}")
+# 环境变量中的统一模型列表
+MODEL_STORE_RAW = os.getenv("MODEL_STORE", "{}")
 
 # 思考模式系统提示模板（由 thinking 模块注入）
 THINKING_SYSTEM_TEMPLATE = (

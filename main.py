@@ -25,10 +25,7 @@ from config import (
     STATIC_DIR,
     logger,
 )
-from custom_models import (
-    load_initial_custom_models,
-    persist_custom_models,
-)
+from model_store import load_initial_model_store, persist_model_store
 from overrides import (
     OverrideRule,
     apply_overrides,
@@ -75,8 +72,8 @@ async def lifespan(app: FastAPI):
     """应用生命周期：初始化 HTTP 客户端和内存配置。"""
     # 启动时从环境变量加载上游渠道配置（可通过 /channels 更新）
     app.state.upstream_channels = load_upstream_channels_from_env()
-    # 加载自定义模型列表（优先持久化文件，其次环境变量）
-    app.state.custom_models = load_initial_custom_models()
+    # 加载统一模型/别名列表（优先持久化文件，其次环境变量）
+    app.state.model_store = load_initial_model_store()
 
     timeout = httpx.Timeout(None, connect=20.0, read=None, write=None, pool=None)
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -145,9 +142,9 @@ async def list_models(
     request: Request = None,
     channel: Optional[str] = Query(None, description="可选：仅拉取指定渠道的模型"),
 ) -> JSONResponse:
-    """返回自定义模型列表（仅持久化 custom_models）。"""
-    custom_models: Dict[str, List[Dict[str, Any]]] = getattr(request.app.state, "custom_models", {}) or {}
-    models = _custom_models_as_list(custom_models)
+    """返回自定义模型列表（仅持久化 model_store）。"""
+    model_store: Dict[str, List[Dict[str, Any]]] = getattr(request.app.state, "model_store", {}) or {}
+    models = _custom_models_as_list(model_store)
     if channel:
         models = [m for m in models if (m.get("metadata", {}) or {}).get("channel") == channel]
     payload: Dict[str, Any] = {"object": "list", "data": models}
@@ -321,8 +318,8 @@ async def upstream_models(
 
 @app.get("/custom-models")
 async def get_custom_models(_: None = Depends(verify_proxy_key), request: Request = None):
-    """获取持久化的自定义模型列表（按渠道分组）。"""
-    models = getattr(request.app.state, "custom_models", {}) or {}
+    """兼容旧接口：返回统一模型存储。"""
+    models = getattr(request.app.state, "model_store", {}) or {}
     return JSONResponse(content=models)
 
 
@@ -332,7 +329,7 @@ async def save_custom_models(
     request: Request = None,
     _: None = Depends(verify_proxy_key),
 ):
-    """替换并持久化自定义模型列表（按渠道分组）。"""
+    """替换并持久化模型/别名列表（按渠道分组）。"""
     incoming: Dict[str, List[Dict[str, Any]]] = {}
     if isinstance(payload, dict):
         for ch, items in payload.items():
@@ -362,9 +359,9 @@ async def save_custom_models(
             if normalized:
                 incoming[ch if isinstance(ch, str) else ""] = normalized
 
-    request.app.state.custom_models = incoming
-    persist_custom_models(incoming)
-    logger.info("自定义模型列表已更新：%s", sum(len(v) for v in incoming.values()))
+    request.app.state.model_store = incoming
+    persist_model_store(incoming)
+    logger.info("模型存储已更新：%s", sum(len(v) for v in incoming.values()))
     return JSONResponse(content={"status": "ok", "count": sum(len(v) for v in incoming.values())})
 
 

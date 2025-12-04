@@ -350,9 +350,8 @@
         ? window.location.origin
         : "http://localhost:14300";
 
-      let customModels = {}; // {channel: [models]}
+      let modelStore = {}; // 统一存储 {channel: [models 或 alias]}
       let upstreamChannels = {};
-      let modelSettings = {}; // 覆写别名
       let upstreamImportList = [];
 
       function log(msg) {
@@ -409,8 +408,8 @@
           opt.textContent = name;
           modelsChannelFilter.appendChild(opt);
         });
-        // 同时补充自定义模型中已有的渠道
-        Object.keys(customModels || {}).forEach((name) => {
+        // 补充存储中已有的渠道
+        Object.keys(modelStore || {}).forEach((name) => {
           if (!name) return;
           if ([...modelsChannelFilter.options].some((o) => o.value === name)) return;
           const opt = document.createElement("option");
@@ -434,7 +433,7 @@
 
       function renderModelList() {
         const list = [];
-        Object.entries(customModels || {}).forEach(([ch, items]) => {
+        Object.entries(modelStore || {}).forEach(([ch, items]) => {
           if (!Array.isArray(items)) return;
           items.forEach((m) => {
             if (!m || typeof m !== "object") return;
@@ -498,13 +497,21 @@
       }
 
       function renderAliasList() {
-        const entries = Object.entries(modelSettings || {});
+        const list = [];
+        Object.entries(modelStore || {}).forEach(([ch, items]) => {
+          if (!Array.isArray(items)) return;
+          items.forEach((m) => {
+            if (!m || typeof m !== "object") return;
+            if (!m.alias_for) return;
+            list.push({ ...m, __channel: ch });
+          });
+        });
         aliasList.textContent = "";
-        if (!entries.length) {
+        if (!list.length) {
           aliasList.textContent = "暂无别名，可在上方添加。";
           return;
         }
-        entries.forEach(([id, cfg]) => {
+        list.forEach((m) => {
           const row = document.createElement("div");
           row.className = "model-row";
           const text = document.createElement("div");
@@ -512,21 +519,21 @@
           text.style.cursor = "pointer";
           const meta = document.createElement("span");
           meta.className = "meta";
-          meta.textContent = `target=${cfg.targetModel || id} · channel=${cfg.channel || ""}`;
+          meta.textContent = `→ ${m.alias_for} · channel=${m.__channel || ""}`;
           const main = document.createElement("span");
-          main.textContent = id;
+          main.textContent = m.id;
           text.appendChild(main);
           text.appendChild(meta);
           text.onclick = () => {
-            aliasModelId.value = id;
-            aliasTargetModel.value = cfg.targetModel || id;
-            aliasChannel.value = cfg.channel || "";
+            aliasModelId.value = m.id;
+            aliasTargetModel.value = m.alias_for || "";
+            aliasChannel.value = m.__channel || "";
           };
           row.appendChild(text);
           const delBtn = document.createElement("button");
           delBtn.className = "danger";
           delBtn.textContent = "删除";
-          delBtn.onclick = () => deleteAlias(id);
+          delBtn.onclick = () => deleteAlias(m.id, m.__channel || "");
           row.appendChild(delBtn);
           aliasList.appendChild(row);
         });
@@ -534,21 +541,21 @@
 
       function removeCustomModel(channel, modelId) {
         if (!customModels[channel]) return;
-        customModels[channel] = customModels[channel].filter((m) => m && m.id !== modelId);
-        if (customModels[channel].length === 0) delete customModels[channel];
+        modelStore[channel] = modelStore[channel].filter((m) => m && m.id !== modelId);
+        if (modelStore[channel].length === 0) delete modelStore[channel];
         renderModelList();
         setStatus(`已删除模型 ${modelId}（渠道=${channel || "未指定"}），记得点击“保存自定义模型”。`);
       }
 
       function addCustomModel(channel, modelId, owned_by = "local", alias_for = "") {
-        if (!customModels[channel]) customModels[channel] = [];
+        if (!modelStore[channel]) modelStore[channel] = [];
         // 去重
-        customModels[channel] = customModels[channel].filter((m) => m && m.id !== modelId);
+        modelStore[channel] = modelStore[channel].filter((m) => m && m.id !== modelId);
         const meta = channel ? { channel } : undefined;
         const obj = { id: modelId, object: "model", owned_by: owned_by || "local" };
         if (alias_for) obj.alias_for = alias_for;
         if (meta) obj.metadata = meta;
-        customModels[channel].push(obj);
+        modelStore[channel].push(obj);
         renderModelList();
       }
 
@@ -558,67 +565,28 @@
           const resp = await fetch(`${endpoint}/custom-models`, { headers: buildHeaders() });
           const data = await resp.json();
           if (!resp.ok) throw new Error(JSON.stringify(data));
-          customModels = data || {};
+          modelStore = data || {};
           renderChannelOptions();
           renderModelList();
-          setStatus("已加载自定义模型列表。");
+          setStatus("已加载模型存储列表。");
         } catch (err) {
           setStatus(`获取自定义模型失败：${err}`);
         }
       }
 
-      async function fetchOverrides() {
-        const endpoint = currentEndpoint();
-        try {
-          const resp = await fetch(`${endpoint}/overrides`, { headers: buildHeaders() });
-          const data = await resp.json();
-          if (!resp.ok) throw new Error(JSON.stringify(data));
-          modelSettings = {};
-          Object.entries(data || {}).forEach(([mid, cfg]) => {
-            modelSettings[mid] = {
-              targetModel: cfg.target_model || mid,
-              channel: cfg.channel || "",
-            };
-          });
-          renderAliasList();
-          setStatus("覆写别名已同步。");
-        } catch (err) {
-          setStatus(`获取覆写配置失败：${err}`);
-        }
-      }
-
-      async function saveOverrides() {
-        const endpoint = currentEndpoint();
-        const payload = {};
-        Object.entries(modelSettings || {}).forEach(([mid, cfg]) => {
-          payload[mid] = {
-            target_model: cfg.targetModel || mid,
-            channel: cfg.channel || undefined,
-          };
-        });
-        const resp = await fetch(`${endpoint}/overrides`, {
-          method: "POST",
-          headers: buildHeaders(),
-          body: JSON.stringify(payload),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
-        setStatus(`别名配置已保存（${data.count} 条）。`);
-      }
-
-      async function saveCustomModels() {
+      async function saveModelStore() {
         const endpoint = currentEndpoint();
         try {
           const resp = await fetch(`${endpoint}/custom-models`, {
             method: "POST",
             headers: buildHeaders(),
-            body: JSON.stringify(customModels || {}),
+            body: JSON.stringify(modelStore || {}),
           });
           const data = await resp.json();
           if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
-          setStatus(`自定义模型已保存，共 ${data.count || 0} 条。`);
+          setStatus(`模型存储已保存，共 ${data.count || 0} 条。`);
         } catch (err) {
-          setStatus(`保存自定义模型失败：${err}`);
+          setStatus(`保存模型存储失败：${err}`);
         }
       }
 
@@ -708,7 +676,7 @@
 
       saveCustomBtn.onclick = () => {
         saveEndpointAndKey();
-        saveCustomModels();
+        saveModelStore();
       };
 
       modelsChannelFilter.onchange = () => {
@@ -743,7 +711,6 @@
         addModelBtn.disabled = true;
         await fetchChannels();
         await fetchCustomModels();
-        await fetchOverrides();
       })();
 
       closeImportBtn.onclick = () => {
@@ -771,7 +738,7 @@
         setStatus(`已导入 ${checked.length} 个模型到渠道 ${ch || "未指定"}，记得保存。`);
       };
 
-      saveAliasBtn.onclick = async () => {
+      saveAliasBtn.onclick = () => {
         const id = aliasModelId.value.trim();
         const target = aliasTargetModel.value.trim();
         const ch = aliasChannel.value.trim();
@@ -779,34 +746,32 @@
           setStatus("请填写别名、目标模型与渠道。");
           return;
         }
-        modelSettings[id] = { targetModel: target, channel: ch };
+        addCustomModel(ch, id, "proxy-override", target);
         renderAliasList();
-        try {
-          await saveOverrides();
-        } catch (err) {
-          setStatus(`保存别名失败：${err}`);
-          return;
-        }
-        setStatus(`别名 ${id} 已保存。`);
+        setStatus(`别名 ${id} 已添加到存储，记得保存。`);
       };
 
-      function deleteAlias(id) {
-        if (!modelSettings[id]) {
+      function deleteAlias(id, ch) {
+        const channel = ch || "";
+        if (!modelStore[channel]) {
           setStatus("别名不存在。");
           return;
         }
-        delete modelSettings[id];
+        modelStore[channel] = modelStore[channel].filter((m) => !(m.alias_for && m.id === id));
+        if (modelStore[channel].length === 0) delete modelStore[channel];
         renderAliasList();
-        saveOverrides().catch((err) => setStatus(`删除别名失败：${err}`));
+        renderModelList();
+        setStatus(`别名 ${id} 已删除，记得保存。`);
       }
 
       deleteAliasBtn.onclick = () => {
         const id = aliasModelId.value.trim();
-        if (!id) {
-          setStatus("请先选择要删除的别名。");
+        const ch = aliasChannel.value.trim();
+        if (!id || !ch) {
+          setStatus("请先填写要删除的别名及渠道。");
           return;
         }
-        deleteAlias(id);
+        deleteAlias(id, ch);
       };
     </script>
   </body>

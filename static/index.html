@@ -262,7 +262,6 @@
                     <div class="flex-row">
                         <button id="importBtn" class="btn btn-sm btn-secondary">从上游导入</button>
                         <button id="addModelBtn" class="btn btn-sm btn-secondary">手动添加</button>
-                        <button id="addAliasBtn" class="btn btn-sm btn-secondary">添加别名</button>
                     </div>
                 </div>
                 <div class="card-body" style="padding: 0;">
@@ -686,18 +685,6 @@
     document.getElementById('addModelBtn').onclick = () => {
         currentEditModel = null;
         document.getElementById('editModelTitle').textContent = '添加模型';
-        els.editModelId.value = '';
-        els.editModelId.disabled = false;
-        els.editModelTarget.value = '';
-        els.editModelChannel.value = els.channelFilter.value || '';
-        els.deleteModelBtn.style.display = 'none';
-        document.getElementById('editModelModal').style.display = 'flex';
-    };
-
-    document.getElementById('addAliasBtn').onclick = () => {
-        // Alias is just a model with a target
-        currentEditModel = null;
-        document.getElementById('editModelTitle').textContent = '添加别名';
         els.editModelId.value = '';
         els.editModelId.disabled = false;
         els.editModelTarget.value = '';

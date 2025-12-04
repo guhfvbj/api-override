@@ -1,4 +1,5 @@
 import json
+import random
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -145,9 +146,42 @@ async def list_models(
     """返回自定义模型列表（仅持久化 model_store）。"""
     model_store: Dict[str, List[Dict[str, Any]]] = getattr(request.app.state, "model_store", {}) or {}
     models = _custom_models_as_list(model_store)
+
+    # 渠道过滤：若指定 channel 参数，则只返回该渠道的模型
     if channel:
         models = [m for m in models if (m.get("metadata", {}) or {}).get("channel") == channel]
-    payload: Dict[str, Any] = {"object": "list", "data": models}
+
+    # 1）构建 {channel: 被别名指向的原始模型 ID 集合}
+    alias_targets_by_channel: Dict[str, set] = {}
+    for m in models:
+        if not isinstance(m, dict):
+            continue
+        alias_for = m.get("alias_for")
+        if not isinstance(alias_for, str) or not alias_for:
+            continue
+        meta = m.get("metadata") if isinstance(m.get("metadata"), dict) else {}
+        ch_name = meta.get("channel") or ""
+        if ch_name not in alias_targets_by_channel:
+            alias_targets_by_channel[ch_name] = set()
+        alias_targets_by_channel[ch_name].add(alias_for)
+
+    # 2）同一渠道内，如某个模型 id 已出现在 alias_for 集合中，则仅保留别名条目，隐藏原始条目
+    filtered: List[Dict[str, Any]] = []
+    for m in models:
+        if not isinstance(m, dict):
+            continue
+        meta = m.get("metadata") if isinstance(m.get("metadata"), dict) else {}
+        ch_name = meta.get("channel") or ""
+        mid = m.get("id")
+        if (
+            not m.get("alias_for")
+            and isinstance(mid, str)
+            and mid in alias_targets_by_channel.get(ch_name, set())
+        ):
+            continue
+        filtered.append(m)
+
+    payload: Dict[str, Any] = {"object": "list", "data": filtered}
     return JSONResponse(content=payload, status_code=200)
 
 
@@ -406,6 +440,22 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     patched_body = apply_overrides(body, overrides_map, thinking_max_length)
     cleaned_body = strip_undefined_fields(patched_body)
     is_stream = bool(cleaned_body.get("stream"))
+
+    # 預先記錄覆寫後的模型 ID，供後續多渠道隨機路由使用
+    model_id_after_override = patched_body.get("model")
+    same_model_after_override = model_id_after_override == body.get("model")
+    candidate_channels_for_model: List[str] = []
+    if same_model_after_override and isinstance(model_id_after_override, str):
+        model_store: Dict[str, List[Dict[str, Any]]] = getattr(request.app.state, "model_store", {}) or {}
+        for ch_name, items in model_store.items():
+            if not isinstance(items, list):
+                continue
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                if it.get("id") == model_id_after_override:
+                    candidate_channels_for_model.append(ch_name)
+                    break
     log_payload("转发请求", cleaned_body)
 
     incoming_model = body.get("model")
@@ -418,6 +468,21 @@ async def chat_completions(_: None = Depends(verify_proxy_key), request: Request
     # 3）根据渠道选择上游 base_url / api_key
     upstream_channels: Dict[str, Dict[str, str]] = getattr(request.app.state, "upstream_channels", {}) or {}
     base_url, api_key, channel_name = choose_upstream_for_request(rule, upstream_channels)
+
+    # 如果当前模型名覆写前后保持一致，说明仅影响路由渠道；
+    # 当该模型在多个渠道下均可用时，在这些渠道中随机选择一个进行调用。
+    if len(candidate_channels_for_model) > 1 and isinstance(model_id_after_override, str):
+        valid_candidates = [ch for ch in candidate_channels_for_model if ch in upstream_channels]
+        if len(valid_candidates) > 1:
+            chosen_channel = random.choice(valid_candidates)
+            cfg = upstream_channels.get(chosen_channel) or {}
+            new_base_url = cfg.get("base_url")
+            new_api_key = cfg.get("api_key")
+            if isinstance(new_base_url, str) and isinstance(new_api_key, str):
+                base_url = strip_trailing_slash(new_base_url)
+                api_key = new_api_key
+                channel_name = chosen_channel
+                logger.info("模型 %s 在多个渠道可用，随机选择渠道：%s", model_id_after_override, chosen_channel)
 
     url = f"{strip_trailing_slash(base_url)}/v1/chat/completions"
     headers = {

@@ -109,6 +109,13 @@
         flex-direction: column;
         gap: 6px;
       }
+      .alias-list {
+        max-height: 280px;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
       .model-row {
         display: flex;
         align-items: center;
@@ -144,6 +151,42 @@
         height: 120px;
         overflow: auto;
         font-size: 12px;
+        color: var(--muted);
+      }
+      .modal-mask {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 999;
+      }
+      .modal {
+        background: #0d1117;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px;
+        width: min(720px, 90vw);
+        max-height: 80vh;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .import-list {
+        max-height: 420px;
+        overflow: auto;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 6px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 1px 6px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 11px;
         color: var(--muted);
       }
     </style>
@@ -197,6 +240,32 @@
 
       <section class="panel">
         <div class="panel-header">
+          <span>模型别名 / 重定向（覆盖 /overrides）</span>
+          <span class="note">设置别名 -> 上游目标模型 + 渠道</span>
+        </div>
+        <div class="row">
+          <label>
+            别名模型 ID（必填）
+            <input id="aliasModelId" placeholder="如：gpt-4o-local" />
+          </label>
+          <label>
+            目标模型 ID（必填）
+            <input id="aliasTargetModel" placeholder="上游实际模型 ID" />
+          </label>
+          <label>
+            渠道（必填）
+            <input id="aliasChannel" placeholder="如：default" />
+          </label>
+        </div>
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+          <button id="saveAliasBtn">保存/更新别名</button>
+          <button id="deleteAliasBtn" class="danger">删除别名</button>
+        </div>
+        <div id="aliasList" class="alias-list note">暂无别名，可上方添加。</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
           <span>渠道配置（UPSTREAM_CHANNELS）</span>
           <span class="note">保存后同步到 .env</span>
         </div>
@@ -229,6 +298,25 @@
       </section>
     </div>
 
+    <div id="importMask" class="modal-mask">
+      <div class="modal">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+          <div>
+            <div style="font-weight:600;">从上游导入模型</div>
+            <div class="note">勾选要导入的模型，导入到当前渠道</div>
+          </div>
+          <button id="closeImportBtn" class="secondary">关闭</button>
+        </div>
+        <div id="importInfo" class="note"></div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="selectAllImportBtn" class="secondary">全选</button>
+          <button id="clearImportBtn" class="secondary">全清</button>
+          <button id="confirmImportBtn">导入选中</button>
+        </div>
+        <div id="importList" class="import-list"></div>
+      </div>
+    </div>
+
     <script>
       const endpointInput = document.getElementById("endpoint");
       const proxyKeyInput = document.getElementById("proxyKey");
@@ -244,6 +332,19 @@
       const addChannelBtn = document.getElementById("addChannelBtn");
       const logBox = document.getElementById("logBox");
       const statusLine = document.getElementById("statusLine");
+      const aliasModelId = document.getElementById("aliasModelId");
+      const aliasTargetModel = document.getElementById("aliasTargetModel");
+      const aliasChannel = document.getElementById("aliasChannel");
+      const saveAliasBtn = document.getElementById("saveAliasBtn");
+      const deleteAliasBtn = document.getElementById("deleteAliasBtn");
+      const aliasList = document.getElementById("aliasList");
+      const importMask = document.getElementById("importMask");
+      const importList = document.getElementById("importList");
+      const importInfo = document.getElementById("importInfo");
+      const closeImportBtn = document.getElementById("closeImportBtn");
+      const selectAllImportBtn = document.getElementById("selectAllImportBtn");
+      const clearImportBtn = document.getElementById("clearImportBtn");
+      const confirmImportBtn = document.getElementById("confirmImportBtn");
 
       const defaultOrigin = window.location.origin.startsWith("http")
         ? window.location.origin
@@ -251,6 +352,8 @@
 
       let customModels = {}; // {channel: [models]}
       let upstreamChannels = {};
+      let modelSettings = {}; // 覆写别名
+      let upstreamImportList = [];
 
       function log(msg) {
         const now = new Date().toLocaleTimeString();
@@ -394,6 +497,41 @@
         });
       }
 
+      function renderAliasList() {
+        const entries = Object.entries(modelSettings || {});
+        aliasList.textContent = "";
+        if (!entries.length) {
+          aliasList.textContent = "暂无别名，可在上方添加。";
+          return;
+        }
+        entries.forEach(([id, cfg]) => {
+          const row = document.createElement("div");
+          row.className = "model-row";
+          const text = document.createElement("div");
+          text.className = "model-item";
+          text.style.cursor = "pointer";
+          const meta = document.createElement("span");
+          meta.className = "meta";
+          meta.textContent = `target=${cfg.targetModel || id} · channel=${cfg.channel || ""}`;
+          const main = document.createElement("span");
+          main.textContent = id;
+          text.appendChild(main);
+          text.appendChild(meta);
+          text.onclick = () => {
+            aliasModelId.value = id;
+            aliasTargetModel.value = cfg.targetModel || id;
+            aliasChannel.value = cfg.channel || "";
+          };
+          row.appendChild(text);
+          const delBtn = document.createElement("button");
+          delBtn.className = "danger";
+          delBtn.textContent = "删除";
+          delBtn.onclick = () => deleteAlias(id);
+          row.appendChild(delBtn);
+          aliasList.appendChild(row);
+        });
+      }
+
       function removeCustomModel(channel, modelId) {
         if (!customModels[channel]) return;
         customModels[channel] = customModels[channel].filter((m) => m && m.id !== modelId);
@@ -427,6 +565,45 @@
         } catch (err) {
           setStatus(`获取自定义模型失败：${err}`);
         }
+      }
+
+      async function fetchOverrides() {
+        const endpoint = currentEndpoint();
+        try {
+          const resp = await fetch(`${endpoint}/overrides`, { headers: buildHeaders() });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(JSON.stringify(data));
+          modelSettings = {};
+          Object.entries(data || {}).forEach(([mid, cfg]) => {
+            modelSettings[mid] = {
+              targetModel: cfg.target_model || mid,
+              channel: cfg.channel || "",
+            };
+          });
+          renderAliasList();
+          setStatus("覆写别名已同步。");
+        } catch (err) {
+          setStatus(`获取覆写配置失败：${err}`);
+        }
+      }
+
+      async function saveOverrides() {
+        const endpoint = currentEndpoint();
+        const payload = {};
+        Object.entries(modelSettings || {}).forEach(([mid, cfg]) => {
+          payload[mid] = {
+            target_model: cfg.targetModel || mid,
+            channel: cfg.channel || undefined,
+          };
+        });
+        const resp = await fetch(`${endpoint}/overrides`, {
+          method: "POST",
+          headers: buildHeaders(),
+          body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
+        setStatus(`别名配置已保存（${data.count} 条）。`);
       }
 
       async function saveCustomModels() {
@@ -483,38 +660,39 @@
         return data.data || [];
       }
 
-      function promptSelectModels(upstreamList) {
-        if (!upstreamList || !upstreamList.length) {
-          alert("上游无模型或拉取失败。");
-          return [];
-        }
-        const names = upstreamList.map((m) => m.id).join(", ");
-        const input = prompt(
-          `上游模型共 ${upstreamList.length} 个。\n当前渠道：${currentChannel() || "未指定"}。\n输入要导入的模型 ID（逗号分隔），留空取消：\n${names}`
-        );
-        if (!input) return [];
-        const ids = input
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-        const picked = upstreamList.filter((m) => ids.includes(m.id));
-        return picked;
+      function openImportModal(list, ch) {
+        upstreamImportList = list || [];
+        importInfo.textContent = `当前渠道：${ch || "未指定"} · 上游模型数：${upstreamImportList.length}`;
+        importList.innerHTML = "";
+        upstreamImportList.forEach((m, idx) => {
+          const wrap = document.createElement("label");
+          wrap.style.display = "flex";
+          wrap.style.alignItems = "center";
+          wrap.style.gap = "6px";
+          wrap.style.border = `1px solid var(--border)`;
+          wrap.style.padding = "6px";
+          wrap.style.borderRadius = "8px";
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.dataset.idx = idx;
+          const text = document.createElement("div");
+          text.style.display = "flex";
+          text.style.flexDirection = "column";
+          text.innerHTML = `<strong>${m.id}</strong><span class="note">owned_by=${m.owned_by || ""}${
+            m.alias_for ? ` · alias_for=${m.alias_for}` : ""
+          }${m.metadata && m.metadata.channel ? ` · channel=${m.metadata.channel}` : ""}</span>`;
+          wrap.appendChild(cb);
+          wrap.appendChild(text);
+          importList.appendChild(wrap);
+        });
+        importMask.style.display = "flex";
       }
 
       refreshModelsBtn.onclick = async () => {
         saveEndpointAndKey();
         try {
           const upstreamList = await fetchUpstreamModels();
-          const picked = promptSelectModels(upstreamList);
-          const ch = currentChannel() || "";
-          if (!picked.length) {
-            setStatus("未选择任何模型导入。");
-            return;
-          }
-          picked.forEach((m) => {
-            addCustomModel(ch, m.id, m.owned_by || "local", m.alias_for || "");
-          });
-          setStatus(`已导入 ${picked.length} 个模型到渠道 ${ch || "未指定"}，记得保存。`);
+          openImportModal(upstreamList, currentChannel() || "");
         } catch (err) {
           setStatus(`刷新上游失败：${err}`);
         }
@@ -565,7 +743,71 @@
         addModelBtn.disabled = true;
         await fetchChannels();
         await fetchCustomModels();
+        await fetchOverrides();
       })();
+
+      closeImportBtn.onclick = () => {
+        importMask.style.display = "none";
+      };
+      selectAllImportBtn.onclick = () => {
+        importList.querySelectorAll("input[type=checkbox]").forEach((cb) => (cb.checked = true));
+      };
+      clearImportBtn.onclick = () => {
+        importList.querySelectorAll("input[type=checkbox]").forEach((cb) => (cb.checked = false));
+      };
+      confirmImportBtn.onclick = () => {
+        const ch = currentChannel() || "";
+        const checked = Array.from(importList.querySelectorAll("input[type=checkbox]")).filter((cb) => cb.checked);
+        if (!checked.length) {
+          alert("未选择任何模型。");
+          return;
+        }
+        checked.forEach((cb) => {
+          const idx = Number(cb.dataset.idx);
+          const m = upstreamImportList[idx];
+          if (m) addCustomModel(ch, m.id, m.owned_by || "local", m.alias_for || "");
+        });
+        importMask.style.display = "none";
+        setStatus(`已导入 ${checked.length} 个模型到渠道 ${ch || "未指定"}，记得保存。`);
+      };
+
+      saveAliasBtn.onclick = async () => {
+        const id = aliasModelId.value.trim();
+        const target = aliasTargetModel.value.trim();
+        const ch = aliasChannel.value.trim();
+        if (!id || !target || !ch) {
+          setStatus("请填写别名、目标模型与渠道。");
+          return;
+        }
+        modelSettings[id] = { targetModel: target, channel: ch };
+        renderAliasList();
+        try {
+          await saveOverrides();
+        } catch (err) {
+          setStatus(`保存别名失败：${err}`);
+          return;
+        }
+        setStatus(`别名 ${id} 已保存。`);
+      };
+
+      function deleteAlias(id) {
+        if (!modelSettings[id]) {
+          setStatus("别名不存在。");
+          return;
+        }
+        delete modelSettings[id];
+        renderAliasList();
+        saveOverrides().catch((err) => setStatus(`删除别名失败：${err}`));
+      }
+
+      deleteAliasBtn.onclick = () => {
+        const id = aliasModelId.value.trim();
+        if (!id) {
+          setStatus("请先选择要删除的别名。");
+          return;
+        }
+        deleteAlias(id);
+      };
     </script>
   </body>
 </html>

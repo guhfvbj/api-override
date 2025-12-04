@@ -134,7 +134,9 @@ async def safe_stream_thinking(upstream_resp: httpx.Response):
                     final_delta["content_blocks"] = remaining_parts
                     final_obj = {"choices": [{"delta": final_delta}]}
                     final_line = "data: " + json.dumps(final_obj, ensure_ascii=False)
+                    # 手动插入一个完整的 SSE 事件（含空行分隔）
                     yield (final_line + "\n").encode("utf-8")
+                    yield b"\n"
                 yield (line + "\n").encode("utf-8")
                 continue
 

@@ -118,35 +118,25 @@ async def index() -> HTMLResponse:
     return HTMLResponse("<h2>newapi 代理</h2><p>未找到静态文件目录</p>")
 
 
-def _augment_models_response(upstream_payload: Any, overrides: Dict[str, OverrideRule]) -> Any:
-    """在 /v1/models 响应结果中追加本地定义的别名模型。"""
-    if not isinstance(upstream_payload, dict):
-        upstream_payload = {"object": "list", "data": []}
-    data = upstream_payload.get("data")
-    if not isinstance(data, list):
-        data = []
-
-    known_ids = {item.get("id") for item in data if isinstance(item, dict)}
-    for alias, rule in overrides.items():
-        if alias in known_ids:
+def _custom_models_as_list(custom_models: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """将按渠道分组的自定义模型转换为列表并补足 metadata.channel。"""
+    result: List[Dict[str, Any]] = []
+    if not isinstance(custom_models, dict):
+        return result
+    for ch_name, items in custom_models.items():
+        if not isinstance(items, list):
             continue
-        meta: Dict[str, Any] = {}
-        if rule.channel:
-            meta["channel"] = rule.channel
-
-        model_obj: Dict[str, Any] = {
-            "id": alias,
-            "object": "model",
-            "owned_by": "proxy-override",
-            "alias_for": rule.target_model or alias,
-        }
-        if meta:
-            model_obj["metadata"] = meta
-
-        data.append(model_obj)
-
-    upstream_payload["data"] = data
-    return upstream_payload
+        for m in items:
+            if not isinstance(m, dict):
+                continue
+            model = dict(m)
+            meta = model.get("metadata") if isinstance(model.get("metadata"), dict) else {}
+            if ch_name:
+                meta["channel"] = ch_name
+            if meta:
+                model["metadata"] = meta
+            result.append(model)
+    return result
 
 
 @app.get("/v1/models")
@@ -155,105 +145,12 @@ async def list_models(
     request: Request = None,
     channel: Optional[str] = Query(None, description="可选：仅拉取指定渠道的模型"),
 ) -> JSONResponse:
-    """从各个渠道拉取 /v1/models，聚合后追加本地别名。"""
-    client: httpx.AsyncClient = request.app.state.http_client
-    upstream_channels: Dict[str, Dict[str, str]] = getattr(request.app.state, "upstream_channels", {}) or {}
-
-    upstreams: List[Tuple[str, str, Optional[str]]] = []
-
-    if channel:
-        cfg = upstream_channels.get(channel)
-        if not isinstance(cfg, dict):
-            raise HTTPException(status_code=400, detail=f"未知渠道: {channel}")
-        base_url = cfg.get("base_url")
-        api_key = cfg.get("api_key")
-        if not isinstance(base_url, str) or not isinstance(api_key, str):
-            raise HTTPException(status_code=400, detail=f"渠道 {channel} 缺少 base_url 或 api_key")
-        upstreams.append((base_url, api_key, channel))
-    else:
-        # 所有有效渠道
-        for name, cfg in upstream_channels.items():
-            if not isinstance(cfg, dict):
-                continue
-            base_url = cfg.get("base_url")
-            api_key = cfg.get("api_key")
-            if isinstance(base_url, str) and isinstance(api_key, str):
-                upstreams.append((base_url, api_key, name))
-        # 若没有任何渠道，但配置了 NEWAPI_*，则退回到单一 NEWAPI 上游
-        if not upstreams and NEWAPI_BASE_URL and NEWAPI_API_KEY:
-            upstreams.append((NEWAPI_BASE_URL, NEWAPI_API_KEY, None))
-
-    if not upstreams:
-        raise HTTPException(status_code=500, detail="没有可用的上游渠道或 NEWAPI 配置")
-
-    aggregated_models: List[Dict[str, Any]] = []
-    any_success = False
-
-    for base_url, api_key, ch_name in upstreams:
-        url = f"{strip_trailing_slash(base_url)}/v1/models"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        if ch_name:
-            headers["X-Channel"] = ch_name
-        try:
-            resp = await client.get(url, headers=headers)
-        except Exception as exc:
-            logger.warning("拉取渠道 %s 模型失败（网络异常）：%s", ch_name or "default", exc)
-            continue
-
-        if resp.status_code >= 400:
-            logger.warning(
-                "拉取渠道 %s 模型失败，状态码=%s，响应=%s",
-                ch_name or "default",
-                resp.status_code,
-                extract_error(resp),
-            )
-            continue
-
-        any_success = True
-        payload_any = extract_payload(resp)
-        if not isinstance(payload_any, dict):
-            continue
-        data = payload_any.get("data")
-        if not isinstance(data, list):
-            continue
-
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            meta = item.get("metadata")
-            if not isinstance(meta, dict):
-                meta = {}
-            if ch_name:
-                meta["channel"] = ch_name
-            if meta:
-                item["metadata"] = meta
-            aggregated_models.append(item)
-
-    if not any_success:
-        raise HTTPException(status_code=502, detail="从任何上游获取 /v1/models 都失败了")
-
-    # 追加持久化自定义模型
+    """返回自定义模型列表（仅持久化 custom_models）。"""
     custom_models: Dict[str, List[Dict[str, Any]]] = getattr(request.app.state, "custom_models", {}) or {}
-    for ch_name, models in (custom_models.items() if isinstance(custom_models, dict) else []):
-        for m in models:
-            if not isinstance(m, dict):
-                continue
-            model_copy = dict(m)
-            meta = model_copy.get("metadata")
-            if not isinstance(meta, dict):
-                meta = {}
-            if ch_name:
-                meta["channel"] = ch_name
-            if meta:
-                model_copy["metadata"] = meta
-            aggregated_models.append(model_copy)
-
-    # 聚合上游模型 + 本地别名
-    payload: Dict[str, Any] = {"object": "list", "data": aggregated_models}
-    payload = _augment_models_response(payload, request.app.state.override_map)
+    models = _custom_models_as_list(custom_models)
+    if channel:
+        models = [m for m in models if (m.get("metadata", {}) or {}).get("channel") == channel]
+    payload: Dict[str, Any] = {"object": "list", "data": models}
     return JSONResponse(content=payload, status_code=200)
 
 
@@ -335,6 +232,91 @@ async def save_channels(
 
     logger.info("上游渠道配置已更新，渠道数：%s", len(merged))
     return JSONResponse(content={"status": "ok", "count": len(merged)})
+
+
+@app.get("/v1/upstream-models")
+async def upstream_models(
+    _: None = Depends(verify_proxy_key),
+    request: Request = None,
+    channel: Optional[str] = Query(None, description="可选：仅拉取指定渠道的模型"),
+) -> JSONResponse:
+    """从上游拉取模型列表（不包含本地自定义），用于导入。"""
+    client: httpx.AsyncClient = request.app.state.http_client
+    upstream_channels: Dict[str, Dict[str, str]] = getattr(request.app.state, "upstream_channels", {}) or {}
+
+    upstreams: List[Tuple[str, str, Optional[str]]] = []
+    if channel:
+        cfg = upstream_channels.get(channel)
+        if not isinstance(cfg, dict):
+            raise HTTPException(status_code=400, detail=f"未知渠道: {channel}")
+        base_url = cfg.get("base_url")
+        api_key = cfg.get("api_key")
+        if not isinstance(base_url, str) or not isinstance(api_key, str):
+            raise HTTPException(status_code=400, detail=f"渠道 {channel} 缺少 base_url 或 api_key")
+        upstreams.append((base_url, api_key, channel))
+    else:
+        for name, cfg in upstream_channels.items():
+            if not isinstance(cfg, dict):
+                continue
+            base_url = cfg.get("base_url")
+            api_key = cfg.get("api_key")
+            if isinstance(base_url, str) and isinstance(api_key, str):
+                upstreams.append((base_url, api_key, name))
+        if not upstreams and NEWAPI_BASE_URL and NEWAPI_API_KEY:
+            upstreams.append((NEWAPI_BASE_URL, NEWAPI_API_KEY, None))
+
+    if not upstreams:
+        raise HTTPException(status_code=500, detail="没有可用的上游渠道或 NEWAPI 配置")
+
+    aggregated_models: List[Dict[str, Any]] = []
+    any_success = False
+    for base_url, api_key, ch_name in upstreams:
+        url = f"{strip_trailing_slash(base_url)}/v1/models"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if ch_name:
+            headers["X-Channel"] = ch_name
+        try:
+            resp = await client.get(url, headers=headers)
+        except Exception as exc:
+            logger.warning("拉取渠道 %s 模型失败（网络异常）：%s", ch_name or "default", exc)
+            continue
+
+        if resp.status_code >= 400:
+            logger.warning(
+                "拉取渠道 %s 模型失败，状态码=%s，响应=%s",
+                ch_name or "default",
+                resp.status_code,
+                extract_error(resp),
+            )
+            continue
+
+        any_success = True
+        payload_any = extract_payload(resp)
+        if not isinstance(payload_any, dict):
+            continue
+        data = payload_any.get("data")
+        if not isinstance(data, list):
+            continue
+
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            meta = item.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
+            if ch_name:
+                meta["channel"] = ch_name
+            if meta:
+                item["metadata"] = meta
+            aggregated_models.append(item)
+
+    if not any_success:
+        raise HTTPException(status_code=502, detail="从任何上游获取 /v1/models 都失败了")
+
+    return JSONResponse(content={"object": "list", "data": aggregated_models}, status_code=200)
 
 
 @app.get("/custom-models")

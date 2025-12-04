@@ -3,13 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>newapi OpenAI 代理 · 模型覆写控制台</title>
+    <title>newapi OpenAI 代理 · 模型管理</title>
     <style>
       :root {
         --bg: #0e1117;
         --panel: #161b22;
         --accent: #00c2ff;
-        --accent-2: #9d6bff;
         --text: #e6edf3;
         --muted: #9ca3af;
         --border: #30363d;
@@ -26,63 +25,32 @@
           var(--bg);
         color: var(--text);
         min-height: 100vh;
-        padding: 24px 16px;
+        padding: 20px 12px;
         display: flex;
         justify-content: center;
       }
       .shell {
-        width: min(1180px, 100%);
+        width: min(1100px, 100%);
         background: rgba(22, 27, 34, 0.95);
-        border-radius: 16px;
+        border-radius: 14px;
         border: 1px solid var(--border);
-        padding: 18px 18px 20px;
+        padding: 16px;
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
         display: flex;
         flex-direction: column;
-        gap: 14px;
+        gap: 12px;
       }
       header {
         display: flex;
+        align-items: center;
         justify-content: space-between;
-        align-items: center;
-        gap: 12px;
+        gap: 10px;
         flex-wrap: wrap;
-      }
-      .title {
-        font-weight: 600;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      .pill {
-        padding: 2px 8px;
-        border-radius: 999px;
-        border: 1px solid rgba(0, 194, 255, 0.4);
-        background: rgba(0, 194, 255, 0.12);
-        color: var(--accent);
-        font-size: 12px;
       }
       .row {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
         gap: 8px;
-      }
-      .panel {
-        border-radius: 12px;
-        border: 1px solid var(--border);
-        background: #0d1117;
-        padding: 12px 12px 10px;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-      .panel-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 8px;
-        font-size: 13px;
-        color: var(--muted);
       }
       label {
         font-size: 13px;
@@ -100,42 +68,51 @@
         color: var(--text);
         font-size: 13px;
         padding: 7px 9px;
-        outline: none;
       }
-      input:focus,
-      select:focus {
-        border-color: var(--accent);
-        box-shadow: 0 0 0 2px rgba(0, 194, 255, 0.2);
-      }
-      textarea {
-        width: 100%;
+      button {
         border-radius: 8px;
         border: 1px solid var(--border);
-        background: #010409;
+        background: #0a0f16;
         color: var(--text);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-          "Courier New", monospace;
-        font-size: 12px;
-        padding: 7px 9px;
-        resize: vertical;
-        outline: none;
+        padding: 7px 12px;
+        cursor: pointer;
       }
-      .layout {
-        display: grid;
-        grid-template-columns: minmax(0, 1.4fr) minmax(0, 2fr);
+      button.secondary {
+        background: transparent;
+        color: var(--muted);
+      }
+      button.danger {
+        border-color: #ff6b6b;
+        color: #ff6b6b;
+      }
+      .panel {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: #0d1117;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
         gap: 10px;
       }
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 13px;
+      }
       .models-list {
-        max-height: 420px;
+        max-height: 460px;
         overflow: auto;
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        gap: 6px;
       }
       .model-row {
         display: flex;
-        gap: 4px;
         align-items: center;
+        gap: 6px;
       }
       .model-item {
         flex: 1;
@@ -146,218 +123,100 @@
         color: var(--text);
         font-size: 13px;
         padding: 7px 9px;
-        cursor: pointer;
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 8px;
       }
-      .model-item span.meta {
+      .model-item .meta {
         font-size: 11px;
         color: var(--muted);
       }
-      .model-item.alias {
-        border-color: rgba(0, 194, 255, 0.5);
-        background: rgba(0, 194, 255, 0.08);
-      }
-      .model-item.active {
-        box-shadow: 0 0 0 1px var(--accent);
-      }
       .note {
-        font-size: 12px;
         color: var(--muted);
+        font-size: 12px;
       }
       .log-box {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-          "Courier New", monospace;
-        font-size: 12px;
-        background: #010409;
-        border-radius: 8px;
+        background: #0a0f16;
         border: 1px solid var(--border);
-        padding: 6px 8px;
-        max-height: 120px;
+        border-radius: 8px;
+        padding: 8px;
+        height: 120px;
         overflow: auto;
-        color: #9ca3af;
-      }
-      .status-line {
         font-size: 12px;
         color: var(--muted);
-      }
-      button {
-        border-radius: 8px;
-        border: 1px solid rgba(148, 163, 184, 0.6);
-        background: #111827;
-        color: var(--text);
-        font-size: 13px;
-        padding: 6px 10px;
-        cursor: pointer;
-      }
-      button.secondary {
-        border-color: rgba(0, 194, 255, 0.6);
-        color: var(--accent);
-      }
-      button.danger {
-        border-color: rgba(248, 113, 113, 0.8);
-        color: #fecaca;
-      }
-      button:hover {
-        background: #020617;
       }
     </style>
   </head>
   <body>
     <div class="shell">
       <header>
-        <div class="title">
-          <span>newapi OpenAI 代理覆写面板</span>
-          <span class="pill">Thinking · 渠道 · 重定向</span>
+        <div>
+          <div style="font-weight:600;">模型管理</div>
+          <div class="note">仅持久化自定义模型，下游 /v1/models 只返回本列表</div>
         </div>
-        <div class="row" style="grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.1fr) auto">
-          <label>
-            代理地址
-            <input id="endpoint" placeholder="默认：当前域名或 http://localhost:14300" />
-          </label>
-          <label>
-            代理密钥（PROXY_API_KEY，可选）
-            <input id="proxyKey" placeholder="用于保护代理访问" />
-          </label>
-          <div style="display: flex; align-items: flex-end; gap: 6px">
-            <button id="refreshModelsBtn" class="secondary">刷新模型</button>
-            <button id="reloadConfigBtn" class="secondary">刷新配置</button>
-          </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="refreshModelsBtn" class="secondary">刷新上游并导入</button>
+          <button id="saveCustomBtn">保存自定义模型</button>
         </div>
       </header>
 
-      <div class="layout">
-        <section class="panel">
-          <div class="panel-header">
-            <span>模型列表</span>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <button id="unhideModelsBtn" class="secondary">取消隐藏</button>
-              <button id="clearModelsCacheBtn" class="secondary">清空本地缓存</button>
-              <span class="note">按渠道分组展示上游模型与代理别名，可手动隐藏/删除</span>
-            </div>
-          </div>
-          <div class="row">
-            <label>
-              模型来源渠道筛选
-              <select id="modelsChannelFilter">
-                <option value="">全部渠道</option>
-              </select>
-            </label>
-          </div>
-          <div class="row">
-            <label>
-              本地模型 ID（仅保存在浏览器缓存）
-              <input id="localModelId" placeholder="如：my-local-model" />
-            </label>
-            <label>
-              本地渠道（可选）
-              <input id="localModelChannel" placeholder="如：local" />
-            </label>
-            <label>
-              owned_by（可选）
-              <input id="localModelOwnedBy" placeholder="默认 local" />
-            </label>
-            <label>
-              alias_for（可选，展示重定向关系）
-              <input id="localModelAliasFor" placeholder="如：upstream-model" />
-            </label>
-          </div>
-          <div style="display:flex;gap:8px;justify-content:flex-end;">
-            <button id="addLocalModelBtn" class="secondary">添加到本地列表</button>
-          </div>
-          <div id="modelsBox" class="models-list">
-            <div class="note">点击右上角“刷新模型”拉取 /v1/models</div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-header">
-            <span>当前别名 / 重定向设置</span>
-            <span id="currentSettingsLine" class="note">未选择模型</span>
-          </div>
-          <div class="row">
-            <label>
-              客户端模型 ID（别名，必填）
-              <input
-                id="settingsModelId"
-                placeholder="例如：claude-sonnet-4-常用 / claude-sonnet-4-备用"
-              />
-            </label>
-          </div>
-          <div class="row">
-            <label>
-              目标模型 ID（上游实际模型名，必填）
-              <input id="settingsTargetModel" placeholder="例如：claude-sonnet-4（必填）" />
-            </label>
-          </div>
-          <div class="row">
-            <label>
-              渠道标识（必填，别名与渠道成对绑定）
-              <input
-                id="settingsChannel"
-                list="channelOptions"
-                placeholder="例如：newapi / copilot"
-              />
-              <datalist id="channelOptions"></datalist>
-            </label>
-          </div>
-          <div class="note">
-            <strong>多渠道同名模型重定向：</strong>例如 newapi 与 copilot 渠道中都存在
-            <code>claude-sonnet-4</code>，可以分别设置别名：
-            <code>claude-sonnet-4-常用</code>（渠道 newapi），
-            <code>claude-sonnet-4-备用</code>（渠道 copilot）。客户端只需调用别名即可走不同渠道。
-          </div>
-          <div class="note">
-            <strong>Thinking 覆写说明：</strong><br />
-            - 请求体中 <code>thinking.type = "enabled"</code> 且有
-            <code>budget_tokens</code> 时，代理会自动追加 antml 思考系统提示词（长度 = <code>budget_tokens</code>）；<br />
-            - 流式响应中的 <code>&lt;thinking&gt;</code> 标签会被覆写为
-            <code>&lt;think&gt;</code>；<br />
-            - 未启用 thinking 时，只做模型重定向与渠道选择，不做额外替换。
-          </div>
-          <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px">
-            <button id="newAliasBtn" class="secondary">新建别名</button>
-            <button id="deleteAliasBtn" class="danger">删除当前别名</button>
-            <button id="saveSettingsBtn">保存当前别名设置</button>
-          </div>
-        </section>
-      </div>
-
       <section class="panel">
         <div class="panel-header">
-          <span>渠道配置（上游地址与密钥）</span>
-          <span class="note">与环境变量 UPSTREAM_CHANNELS 双向同步</span>
+          <span>代理与鉴权</span>
         </div>
-        <div id="channelList" class="note">暂无渠道</div>
         <div class="row">
           <label>
-            渠道名称
-            <input id="newChannelName" placeholder="例如：newapi / copilot" />
+            代理地址
+            <input id="endpoint" placeholder="默认当前域名或 http://localhost:14300" />
           </label>
           <label>
-            上游地址 base_url
-            <input id="newChannelBaseUrl" placeholder="例如：https://api.xxx.com" />
+            代理密钥（可选）
+            <input id="proxyKey" placeholder="PROXY_API_KEY" />
           </label>
-          <label>
-            上游密钥 api_key
-            <input id="newChannelKey" placeholder="例如：sk-xxxx" />
-          </label>
-          <div style="display: flex; align-items: flex-end">
-            <button id="addChannelBtn" class="secondary">添加 / 更新渠道</button>
-          </div>
         </div>
       </section>
 
       <section class="panel">
         <div class="panel-header">
-          <span>覆写配置预览</span>
-          <span class="note">结构等同于 /overrides 与环境变量 MODEL_OVERRIDE_MAP</span>
+          <span>渠道与模型</span>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <label style="margin:0; display:flex; align-items:center; gap:6px; color:var(--muted);">
+              渠道筛选
+              <select id="modelsChannelFilter">
+                <option value="">全部渠道</option>
+              </select>
+            </label>
+            <button id="addModelBtn" class="secondary" disabled>在当前渠道添加模型</button>
+          </div>
         </div>
-        <textarea id="configPreview" readonly style="min-height: 140px"></textarea>
-        <div class="note">
-          可将此 JSON 复制到服务端环境变量 <code>MODEL_OVERRIDE_MAP</code> 中，以便在无本地文件时也能恢复配置。
+        <div id="modelsBox" class="models-list">
+          <div class="note">点击左上角“刷新上游并导入”可从上游选择模型加入列表。</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <span>渠道配置（UPSTREAM_CHANNELS）</span>
+          <span class="note">保存后同步到 .env</span>
+        </div>
+        <div id="channelList" class="note">暂无渠道</div>
+        <div class="row">
+          <label>
+            渠道名称
+            <input id="newChannelName" placeholder="如：newapi / copilot" />
+          </label>
+          <label>
+            上游地址 base_url
+            <input id="newChannelBaseUrl" placeholder="https://api.xxx.com" />
+          </label>
+          <label>
+            上游密钥 api_key
+            <input id="newChannelKey" placeholder="sk-xxxx" />
+          </label>
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
+          <button id="addChannelBtn">保存渠道</button>
         </div>
       </section>
 
@@ -366,7 +225,7 @@
           <span>日志</span>
         </div>
         <div id="logBox" class="log-box"></div>
-        <div id="statusLine" class="status-line"></div>
+        <div id="statusLine" class="note"></div>
       </section>
     </div>
 
@@ -374,44 +233,24 @@
       const endpointInput = document.getElementById("endpoint");
       const proxyKeyInput = document.getElementById("proxyKey");
       const refreshModelsBtn = document.getElementById("refreshModelsBtn");
-      const reloadConfigBtn = document.getElementById("reloadConfigBtn");
+      const saveCustomBtn = document.getElementById("saveCustomBtn");
       const modelsChannelFilter = document.getElementById("modelsChannelFilter");
-      const unhideModelsBtn = document.getElementById("unhideModelsBtn");
-      const clearModelsCacheBtn = document.getElementById("clearModelsCacheBtn");
       const modelsBox = document.getElementById("modelsBox");
-      const settingsModelId = document.getElementById("settingsModelId");
-      const settingsTargetModel = document.getElementById("settingsTargetModel");
-      const settingsChannel = document.getElementById("settingsChannel");
-      const channelOptions = document.getElementById("channelOptions");
-      const saveSettingsBtn = document.getElementById("saveSettingsBtn");
-      const newAliasBtn = document.getElementById("newAliasBtn");
-      const deleteAliasBtn = document.getElementById("deleteAliasBtn");
-      const addLocalModelBtn = document.getElementById("addLocalModelBtn");
-      const localModelId = document.getElementById("localModelId");
-      const localModelChannel = document.getElementById("localModelChannel");
-      const localModelOwnedBy = document.getElementById("localModelOwnedBy");
-      const localModelAliasFor = document.getElementById("localModelAliasFor");
-      const configPreview = document.getElementById("configPreview");
-      const logBox = document.getElementById("logBox");
-      const statusLine = document.getElementById("statusLine");
-      const currentSettingsLine = document.getElementById("currentSettingsLine");
+      const addModelBtn = document.getElementById("addModelBtn");
       const channelList = document.getElementById("channelList");
       const newChannelName = document.getElementById("newChannelName");
       const newChannelBaseUrl = document.getElementById("newChannelBaseUrl");
       const newChannelKey = document.getElementById("newChannelKey");
       const addChannelBtn = document.getElementById("addChannelBtn");
+      const logBox = document.getElementById("logBox");
+      const statusLine = document.getElementById("statusLine");
 
       const defaultOrigin = window.location.origin.startsWith("http")
         ? window.location.origin
         : "http://localhost:14300";
 
-      let modelsCache = [];
-      let localModels = []; // 本地缓存的手动模型
-      let modelSettings = {}; // { aliasId: { targetModel, channel } }
+      let customModels = {}; // {channel: [models]}
       let upstreamChannels = {};
-      let currentBaseModelId = "";
-      let currentEditingModelId = "";
-      let hiddenModels = new Set(); // Set<string> 形如 "channel::modelId"
 
       function log(msg) {
         const now = new Date().toLocaleTimeString();
@@ -451,79 +290,32 @@
         proxyKeyInput.value = key;
       }
 
-      function loadHiddenModels() {
-        try {
-          const raw = localStorage.getItem("hidden_models") || "[]";
-          const arr = JSON.parse(raw);
-          if (Array.isArray(arr)) {
-            hiddenModels = new Set(arr);
-          } else {
-            hiddenModels = new Set();
-          }
-        } catch {
-          hiddenModels = new Set();
-        }
+      function currentChannel() {
+        return modelsChannelFilter.value || "";
       }
 
-      function saveHiddenModels() {
-        try {
-          localStorage.setItem("hidden_models", JSON.stringify(Array.from(hiddenModels)));
-        } catch {
-          // 忽略本地存储错误
-        }
+      function renderChannelOptions() {
+        modelsChannelFilter.innerHTML = "";
+        const allOpt = document.createElement("option");
+        allOpt.value = "";
+        allOpt.textContent = "全部渠道";
+        modelsChannelFilter.appendChild(allOpt);
+        Object.keys(upstreamChannels || {}).forEach((name) => {
+          const opt = document.createElement("option");
+          opt.value = name;
+          opt.textContent = name;
+          modelsChannelFilter.appendChild(opt);
+        });
+        // 同时补充自定义模型中已有的渠道
+        Object.keys(customModels || {}).forEach((name) => {
+          if (!name) return;
+          if ([...modelsChannelFilter.options].some((o) => o.value === name)) return;
+          const opt = document.createElement("option");
+          opt.value = name;
+          opt.textContent = name;
+          modelsChannelFilter.appendChild(opt);
+        });
       }
-
-      function loadModelsCache() {
-        try {
-          const raw = localStorage.getItem("models_cache_v1") || "{}";
-          const obj = JSON.parse(raw);
-          if (obj && typeof obj === "object") {
-            modelsCache = Array.isArray(obj.remote) ? obj.remote : [];
-            localModels = Array.isArray(obj.local) ? obj.local : [];
-          }
-        } catch {
-          modelsCache = [];
-          localModels = [];
-        }
-      }
-
-      function saveModelsCache() {
-        try {
-          const payload = { remote: modelsCache || [], local: localModels || [] };
-          localStorage.setItem("models_cache_v1", JSON.stringify(payload));
-        } catch {
-          // 忽略本地存储错误
-        }
-      }
-
-      function getMergedModels() {
-        // 合并远程与本地模型，按 (channel::id) 去重，优先本地
-        const map = new Map();
-        const push = (item, isLocal = false) => {
-          if (!item || typeof item !== "object" || !item.id) return;
-          const ch = (item.metadata && item.metadata.channel) || "";
-          const key = `${ch}::${item.id}`;
-          if (isLocal || !map.has(key)) map.set(key, item);
-        };
-        (modelsCache || []).forEach((m) => push(m, false));
-        (localModels || []).forEach((m) => push(m, true));
-        return Array.from(map.values());
-      }
-
-      unhideModelsBtn.onclick = () => {
-        hiddenModels = new Set();
-        saveHiddenModels();
-        renderModelList(getMergedModels());
-        setStatus("已取消隐藏所有模型。");
-      };
-
-      clearModelsCacheBtn.onclick = () => {
-        modelsCache = [];
-        localModels = [];
-        saveModelsCache();
-        renderModelList([]);
-        setStatus("已清空本地模型缓存。");
-      };
 
       function renderChannels() {
         const entries = Object.entries(upstreamChannels || {});
@@ -534,24 +326,123 @@
             .map(([name, cfg]) => `${name} (${cfg.base_url || "未配置地址"})`)
             .join(" · ");
         }
+        renderChannelOptions();
+      }
 
-        channelOptions.innerHTML = "";
-        modelsChannelFilter.innerHTML = "";
-        const allOpt = document.createElement("option");
-        allOpt.value = "";
-        allOpt.textContent = "全部渠道";
-        modelsChannelFilter.appendChild(allOpt);
-
-        entries.forEach(([name]) => {
-          const opt = document.createElement("option");
-          opt.value = name;
-          opt.textContent = name;
-          modelsChannelFilter.appendChild(opt);
-
-          const opt2 = document.createElement("option");
-          opt2.value = name;
-          channelOptions.appendChild(opt2);
+      function renderModelList() {
+        const list = [];
+        Object.entries(customModels || {}).forEach(([ch, items]) => {
+          if (!Array.isArray(items)) return;
+          items.forEach((m) => {
+            if (!m || typeof m !== "object") return;
+            list.push({ ...m, __channel: ch });
+          });
         });
+
+        const filterCh = currentChannel();
+        const groups = {};
+        list.forEach((item) => {
+          const ch = item.__channel || "";
+          if (filterCh && ch !== filterCh) return;
+          const key = ch || "未指定渠道";
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(item);
+        });
+
+        modelsBox.textContent = "";
+        if (!Object.keys(groups).length) {
+          modelsBox.textContent = "暂无自定义模型。可在上方选择渠道并点击“添加模型”或刷新上游导入。";
+          return;
+        }
+
+        Object.entries(groups).forEach(([ch, items]) => {
+          const header = document.createElement("div");
+          header.className = "note";
+          header.textContent = `渠道：${ch}`;
+          modelsBox.appendChild(header);
+
+          items.forEach((item) => {
+            const row = document.createElement("div");
+            row.className = "model-row";
+
+            const btn = document.createElement("div");
+            btn.className = "model-item";
+            const main = document.createElement("span");
+            main.textContent = item.id;
+            const meta = document.createElement("span");
+            meta.className = "meta";
+            const metaParts = [];
+            if (item.alias_for) metaParts.push(`别名 → ${item.alias_for}`);
+            metaParts.push(`owned_by=${item.owned_by || "local"}`);
+            if (item.metadata && item.metadata.channel) metaParts.push(`channel=${item.metadata.channel}`);
+            meta.textContent = metaParts.join(" · ");
+            btn.appendChild(main);
+            btn.appendChild(meta);
+            row.appendChild(btn);
+
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "danger";
+            delBtn.textContent = "删除";
+            delBtn.onclick = () => {
+              removeCustomModel(item.__channel || "", item.id);
+            };
+            row.appendChild(delBtn);
+
+            modelsBox.appendChild(row);
+          });
+        });
+      }
+
+      function removeCustomModel(channel, modelId) {
+        if (!customModels[channel]) return;
+        customModels[channel] = customModels[channel].filter((m) => m && m.id !== modelId);
+        if (customModels[channel].length === 0) delete customModels[channel];
+        renderModelList();
+        setStatus(`已删除模型 ${modelId}（渠道=${channel || "未指定"}），记得点击“保存自定义模型”。`);
+      }
+
+      function addCustomModel(channel, modelId, owned_by = "local", alias_for = "") {
+        if (!customModels[channel]) customModels[channel] = [];
+        // 去重
+        customModels[channel] = customModels[channel].filter((m) => m && m.id !== modelId);
+        const meta = channel ? { channel } : undefined;
+        const obj = { id: modelId, object: "model", owned_by: owned_by || "local" };
+        if (alias_for) obj.alias_for = alias_for;
+        if (meta) obj.metadata = meta;
+        customModels[channel].push(obj);
+        renderModelList();
+      }
+
+      async function fetchCustomModels() {
+        const endpoint = currentEndpoint();
+        try {
+          const resp = await fetch(`${endpoint}/custom-models`, { headers: buildHeaders() });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(JSON.stringify(data));
+          customModels = data || {};
+          renderChannelOptions();
+          renderModelList();
+          setStatus("已加载自定义模型列表。");
+        } catch (err) {
+          setStatus(`获取自定义模型失败：${err}`);
+        }
+      }
+
+      async function saveCustomModels() {
+        const endpoint = currentEndpoint();
+        try {
+          const resp = await fetch(`${endpoint}/custom-models`, {
+            method: "POST",
+            headers: buildHeaders(),
+            body: JSON.stringify(customModels || {}),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
+          setStatus(`自定义模型已保存，共 ${data.count || 0} 条。`);
+        } catch (err) {
+          setStatus(`保存自定义模型失败：${err}`);
+        }
       }
 
       async function fetchChannels() {
@@ -569,7 +460,6 @@
 
       async function saveChannelsToServer(channelsObj) {
         const endpoint = currentEndpoint();
-        const oldChannels = { ...(upstreamChannels || {}) };
         const resp = await fetch(`${endpoint}/channels`, {
           method: "POST",
           headers: buildHeaders(),
@@ -579,310 +469,73 @@
         if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
         upstreamChannels = channelsObj;
         renderChannels();
-
-        const removed = Object.keys(oldChannels).filter((name) => !(name in channelsObj));
-        if (removed.length) {
-          modelsCache = modelsCache.filter((item) => {
-            if (!item || typeof item !== "object") return false;
-            const ch = item.metadata && item.metadata.channel;
-            return !removed.includes(ch);
-          });
-          renderModelList(getMergedModels());
-        }
       }
 
-      function currentModelsChannel() {
-        return modelsChannelFilter.value || "";
-      }
-
-      function renderModelList(list) {
-        modelsBox.textContent = "";
-        if (!list || !list.length) {
-          modelsBox.textContent = "暂无模型，请确认上游配置是否正确。";
-          return;
-        }
-
-        const groups = {};
-        list.forEach((item) => {
-          if (!item || typeof item !== "object") return;
-          const ch = (item.metadata && item.metadata.channel) || "默认/未指定";
-          const key = `${ch}::${item.id}`;
-          if (hiddenModels.has(key)) return;
-
-          const filterCh = currentModelsChannel();
-          if (filterCh && ch !== filterCh) return;
-
-          if (!groups[ch]) groups[ch] = [];
-          groups[ch].push(item);
-        });
-
-        Object.entries(groups).forEach(([ch, items]) => {
-          const header = document.createElement("div");
-          header.className = "note";
-          header.textContent = `渠道：${ch}`;
-          modelsBox.appendChild(header);
-
-          items.forEach((item) => {
-            const row = document.createElement("div");
-            row.className = "model-row";
-
-            const btn = document.createElement("button");
-            btn.type = "button";
-            btn.className = "model-item";
-            const isAlias = item.owned_by === "proxy-override";
-            if (isAlias) btn.classList.add("alias");
-            btn.dataset.modelId = item.id;
-
-            const main = document.createElement("span");
-            main.textContent = item.id;
-
-            const meta = document.createElement("span");
-            meta.className = "meta";
-            const metaParts = [];
-            if (item.alias_for) metaParts.push(`→ ${item.alias_for}`);
-            if (item.metadata && item.metadata.channel)
-              metaParts.push(`渠道=${item.metadata.channel}`);
-            meta.textContent = metaParts.join(" · ");
-
-            btn.appendChild(main);
-            btn.appendChild(meta);
-            btn.onclick = () => openSettings(item.id, item);
-            row.appendChild(btn);
-
-            const delBtn = document.createElement("button");
-            delBtn.type = "button";
-            delBtn.className = "danger";
-              delBtn.textContent = isAlias ? "删别名" : "隐藏";
-              delBtn.onclick = async (ev) => {
-                ev.stopPropagation();
-                if (isAlias) {
-                  await deleteAliasById(item.id);
-                } else {
-                  const key = `${ch}::${item.id}`;
-                  hiddenModels.add(key);
-                  saveHiddenModels();
-                  renderModelList(getMergedModels());
-                  setStatus(`已从列表隐藏模型 ${item.id}（渠道=${ch}）`);
-                }
-              };
-              row.appendChild(delBtn);
-
-            modelsBox.appendChild(row);
-          });
-        });
-      }
-
-      async function fetchModels() {
+      async function fetchUpstreamModels() {
         const endpoint = currentEndpoint();
-        const ch = currentModelsChannel();
-        let url = `${endpoint}/v1/models`;
-        if (ch) {
-          url += `?channel=${encodeURIComponent(ch)}`;
-        }
-        setStatus("正在拉取模型列表...");
-        try {
-          const resp = await fetch(url, { headers: buildHeaders() });
-          const data = await resp.json();
-          if (!resp.ok) throw new Error(JSON.stringify(data));
-          modelsCache = data.data || [];
-          saveModelsCache();
-          renderModelList(getMergedModels());
-          setStatus("模型列表已更新，点击模型可编辑覆写设置。");
-        } catch (err) {
-          modelsBox.textContent = "获取失败";
-          setStatus(`拉取模型失败：${err}`);
-        }
-      }
-
-      function updateSettingsLine() {
-        const aliasId = settingsModelId.value.trim();
-        if (!aliasId) {
-          currentSettingsLine.textContent = "未选择模型";
-          return;
-        }
-        const targetModel = settingsTargetModel.value.trim() || aliasId;
-        const channel = settingsChannel.value.trim();
-        const baseInfo = currentBaseModelId ? `上游参考=${currentBaseModelId}` : "上游参考=未选择";
-        const targetInfo =
-          targetModel === aliasId
-            ? "未配置重定向（上游模型与别名相同）"
-            : `重定向到上游模型=${targetModel}`;
-        const channelInfo = channel ? `渠道=${channel}` : "渠道未设";
-        currentSettingsLine.textContent = `别名模型=${aliasId} · ${targetInfo} · ${channelInfo} · ${baseInfo}`;
-      }
-
-      function renderConfigPreview() {
-        const cfg = {};
-        Object.entries(modelSettings).forEach(([id, item]) => {
-          cfg[id] = {
-            target_model: item.targetModel || id,
-            channel: item.channel || undefined,
-          };
-        });
-        configPreview.value = JSON.stringify(cfg, null, 2);
-      }
-
-      async function fetchOverrides() {
-        const endpoint = currentEndpoint();
-        try {
-          const resp = await fetch(`${endpoint}/overrides`, { headers: buildHeaders() });
-          const data = await resp.json();
-          if (!resp.ok) throw new Error(JSON.stringify(data));
-          modelSettings = {};
-          Object.entries(data || {}).forEach(([mid, cfg]) => {
-            modelSettings[mid] = {
-              targetModel: cfg.target_model || mid,
-              channel: cfg.channel || "",
-            };
-          });
-          renderConfigPreview();
-          updateSettingsLine();
-          setStatus("覆写配置已同步。");
-        } catch (err) {
-          setStatus(`获取覆写配置失败：${err}`);
-        }
-      }
-
-      async function persistOverrides() {
-        const endpoint = currentEndpoint();
-        const payload = {};
-        Object.entries(modelSettings).forEach(([mid, item]) => {
-          payload[mid] = {
-            target_model: item.targetModel || mid,
-            channel: item.channel || undefined,
-          };
-        });
-        const resp = await fetch(`${endpoint}/overrides`, {
-          method: "POST",
-          headers: buildHeaders(),
-          body: JSON.stringify(payload),
-        });
+        const ch = currentChannel();
+        let url = `${endpoint}/v1/upstream-models`;
+        if (ch) url += `?channel=${encodeURIComponent(ch)}`;
+        setStatus("正在拉取上游模型...");
+        const resp = await fetch(url, { headers: buildHeaders() });
         const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
-        setStatus(`覆写配置已持久化（共 ${data.count} 条）。`);
+        if (!resp.ok) throw new Error(JSON.stringify(data));
+        return data.data || [];
       }
 
-      function openSettings(modelId, modelObj) {
-        currentEditingModelId = modelId;
-        currentBaseModelId = (modelObj && (modelObj.alias_for || modelObj.id)) || "";
-        settingsModelId.value = modelId;
-        const cfg = modelSettings[modelId] || {};
-        settingsTargetModel.value = cfg.targetModel || currentBaseModelId || modelId;
-        settingsChannel.value =
-          cfg.channel || (modelObj && modelObj.metadata && modelObj.metadata.channel) || "";
-        updateSettingsLine();
-
-        Array.from(modelsBox.querySelectorAll(".model-item")).forEach((btn) => {
-          if (btn.dataset.modelId === modelId) btn.classList.add("active");
-          else btn.classList.remove("active");
-        });
+      function promptSelectModels(upstreamList) {
+        if (!upstreamList || !upstreamList.length) {
+          alert("上游无模型或拉取失败。");
+          return [];
+        }
+        const names = upstreamList.map((m) => m.id).join(", ");
+        const input = prompt(
+          `上游模型共 ${upstreamList.length} 个。\n当前渠道：${currentChannel() || "未指定"}。\n输入要导入的模型 ID（逗号分隔），留空取消：\n${names}`
+        );
+        if (!input) return [];
+        const ids = input
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const picked = upstreamList.filter((m) => ids.includes(m.id));
+        return picked;
       }
 
-      async function saveSettings() {
-        const modelId = settingsModelId.value.trim();
-        if (!modelId) {
-          setStatus("请先填写“客户端模型 ID（别名）”。");
-          return;
-        }
-        const targetModel = settingsTargetModel.value.trim();
-        const channel = settingsChannel.value.trim();
-        if (!targetModel) {
-          setStatus("请填写“目标模型 ID（上游实际模型名）”。");
-          return;
-        }
-        if (!channel) {
-          setStatus("请先选择渠道，别名需要与渠道成对绑定。");
-          return;
-        }
-
-        if (currentEditingModelId && currentEditingModelId !== modelId) {
-          delete modelSettings[currentEditingModelId];
-          currentEditingModelId = modelId;
-        }
-
-        modelSettings[modelId] = {
-          targetModel,
-          channel,
-        };
-        updateSettingsLine();
-        renderConfigPreview();
-
-        try {
-          await persistOverrides();
-          // 从后端重新拉取模型列表，保证新建/修改的别名立即在 UI 中显示
-          await fetchModels();
-        } catch (err) {
-          setStatus(`保存覆写到服务端失败：${err}`);
-          return;
-        }
-        setStatus(`已保存模型 ${modelId} 的覆写设置并同步到服务端。`);
-      }
-
-      async function deleteAliasById(aliasId) {
-        if (!modelSettings[aliasId]) {
-          setStatus(`别名 ${aliasId} 在配置中不存在，无需删除。`);
-          return;
-        }
-        // 仅清除重命名配置，不隐藏或删除模型列表中的模型
-        delete modelSettings[aliasId];
-        renderConfigPreview();
-
-        if (settingsModelId.value.trim() === aliasId) {
-          settingsModelId.value = "";
-          settingsTargetModel.value = "";
-          settingsChannel.value = "";
-          currentEditingModelId = "";
-          currentBaseModelId = "";
-          updateSettingsLine();
-        }
-
-        try {
-          await persistOverrides();
-          // 删除后重新拉取模型列表，确保 UI 与后端配置同步（别名从列表中消失）
-          await fetchModels();
-        } catch (err) {
-          setStatus(`删除别名失败：${err}`);
-          return;
-        }
-        setStatus(`别名 ${aliasId} 已从覆写配置中删除并同步到服务端。`);
-      }
-
-      function newAlias() {
-        currentEditingModelId = "";
-        currentBaseModelId = "";
-        settingsModelId.value = "";
-        settingsTargetModel.value = "";
-        settingsChannel.value = "";
-        updateSettingsLine();
-      }
-
-      async function deleteAlias() {
-        const aliasId = settingsModelId.value.trim();
-        if (!aliasId) {
-          setStatus("请先选择或填写要删除的别名。");
-          return;
-        }
-        await deleteAliasById(aliasId);
-      }
-
-      refreshModelsBtn.onclick = () => {
+      refreshModelsBtn.onclick = async () => {
         saveEndpointAndKey();
-        fetchModels();
+        try {
+          const upstreamList = await fetchUpstreamModels();
+          const picked = promptSelectModels(upstreamList);
+          const ch = currentChannel() || "";
+          if (!picked.length) {
+            setStatus("未选择任何模型导入。");
+            return;
+          }
+          picked.forEach((m) => {
+            addCustomModel(ch, m.id, m.owned_by || "local", m.alias_for || "");
+          });
+          setStatus(`已导入 ${picked.length} 个模型到渠道 ${ch || "未指定"}，记得保存。`);
+        } catch (err) {
+          setStatus(`刷新上游失败：${err}`);
+        }
       };
 
-      reloadConfigBtn.onclick = () => {
-        saveEndpointAndKey();
-        fetchOverrides();
-        fetchChannels();
+      addModelBtn.onclick = () => {
+        const ch = currentChannel() || "";
+        const id = prompt(`输入要添加的模型 ID（渠道：${ch || "未指定"}）`);
+        if (!id) return;
+        addCustomModel(ch, id.trim());
+        setStatus(`已添加本地模型 ${id}（渠道=${ch || "未指定"}），记得保存。`);
       };
 
-      saveSettingsBtn.onclick = saveSettings;
-      newAliasBtn.onclick = newAlias;
-      deleteAliasBtn.onclick = deleteAlias;
+      saveCustomBtn.onclick = () => {
+        saveEndpointAndKey();
+        saveCustomModels();
+      };
 
       modelsChannelFilter.onchange = () => {
-        // 切换渠道时仅基于已缓存的模型做前端筛选，不触发新的拉取
-        renderModelList(getMergedModels());
+        renderModelList();
+        addModelBtn.disabled = currentChannel() === "";
       };
 
       addChannelBtn.onclick = async () => {
@@ -907,178 +560,11 @@
         setStatus(`渠道 ${name} 已更新并同步到 .env（UPSTREAM_CHANNELS）。`);
       };
 
-      addLocalModelBtn.onclick = () => {
-        const id = (localModelId.value || "").trim();
-        if (!id) {
-          setStatus("请填写本地模型 ID。");
-          return;
-        }
-        const channel = (localModelChannel.value || "").trim();
-        const ownedBy = (localModelOwnedBy.value || "local").trim();
-        const aliasFor = (localModelAliasFor.value || "").trim();
-
-        const modelObj = {
-          id,
-          object: "model",
-          owned_by: ownedBy || "local",
-          metadata: channel ? { channel } : {},
-        };
-        if (aliasFor) modelObj.alias_for = aliasFor;
-
-        const key = `${channel || ""}::${id}`;
-        localModels = (localModels || []).filter((m) => {
-          const ch = (m.metadata && m.metadata.channel) || "";
-          return `${ch}::${m.id}` !== key;
-        });
-        localModels.push(modelObj);
-        saveModelsCache();
-        renderModelList(getMergedModels());
-        setStatus(`已添加本地模型 ${id}${channel ? `（渠道 ${channel}）` : ""}`);
-      };
-
       (async function init() {
         hydrateEndpointAndKey();
-        loadHiddenModels();
-        loadModelsCache();
-        renderModelList(getMergedModels());
+        addModelBtn.disabled = true;
         await fetchChannels();
-        await fetchOverrides();
-        // 初始拉取一次模型列表，后续只在点击“刷新模型”时拉取
-        await fetchModels();
-      })();
-    </script>
-    <script>
-      // 覆盖部分前端行为：
-      // 1）隐藏“新建别名”按钮；
-      // 2）仅在模型列表中展示上游模型，并在行内标记别名；
-      // 3）打开设置时，从上游模型反查当前渠道下的别名。
-      (function () {
-        // 隐藏“新建别名”按钮（不再提供该选项）
-        const newAliasBtnEl = document.getElementById("newAliasBtn");
-        if (newAliasBtnEl && newAliasBtnEl.parentElement) {
-          newAliasBtnEl.parentElement.removeChild(newAliasBtnEl);
-        }
-
-        // 重写模型列表渲染逻辑
-        window.renderModelList = function (list) {
-          modelsBox.textContent = "";
-          const data = list && list.length ? list : getMergedModels();
-          if (!data || !data.length) {
-            modelsBox.textContent = "暂无模型，请确认上游配置是否正确";
-            return;
-          }
-
-          const groups = {};
-          (data || []).forEach((item) => {
-            if (!item || typeof item !== "object") return;
-            // 列表中仅展示上游模型，不单独展示代理生成的别名模型
-            if (item.owned_by === "proxy-override") return;
-            const ch = (item.metadata && item.metadata.channel) || "默认/未指定";
-            const key = `${ch}::${item.id}`;
-            if (hiddenModels.has(key)) return;
-
-            const filterCh = currentModelsChannel();
-            if (filterCh && ch !== filterCh) return;
-
-            if (!groups[ch]) groups[ch] = [];
-            groups[ch].push(item);
-          });
-
-          Object.entries(groups).forEach(([ch, items]) => {
-            const header = document.createElement("div");
-            header.className = "note";
-            header.textContent = `渠道：${ch}`;
-            modelsBox.appendChild(header);
-
-            items.forEach((item) => {
-              const row = document.createElement("div");
-              row.className = "model-row";
-
-              const btn = document.createElement("button");
-              btn.type = "button";
-              btn.className = "model-item";
-              btn.dataset.modelId = item.id;
-
-              const main = document.createElement("span");
-              main.textContent = item.id;
-
-              const meta = document.createElement("span");
-              meta.className = "meta";
-              const metaParts = [];
-
-              // 渠道信息
-              const chName = item.metadata && item.metadata.channel;
-              if (chName) {
-                metaParts.push(`渠道=${chName}`);
-              }
-
-              // 别名信息：从当前覆写配置中反查哪些别名指向该模型
-              const aliasNames = [];
-              Object.entries(modelSettings || {}).forEach(([aliasId, cfg]) => {
-                if (!cfg || typeof cfg !== "object") return;
-                if (cfg.targetModel === item.id && cfg.channel === ch) {
-                  aliasNames.push(aliasId);
-                }
-              });
-              if (aliasNames.length) {
-                metaParts.push(`别名=${aliasNames.join(", ")}`);
-              }
-
-              meta.textContent = metaParts.join(" · ");
-
-              btn.appendChild(main);
-              btn.appendChild(meta);
-              btn.onclick = () => openSettings(item.id, item);
-              row.appendChild(btn);
-
-              const delBtn = document.createElement("button");
-              delBtn.type = "button";
-              delBtn.className = "danger";
-              delBtn.textContent = "隐藏";
-              delBtn.onclick = (ev) => {
-                ev.stopPropagation();
-                const key = `${ch}::${item.id}`;
-                hiddenModels.add(key);
-                saveHiddenModels();
-                renderModelList(getMergedModels());
-                setStatus(`已从列表隐藏模型 ${item.id}（渠道 ${ch}）`);
-              };
-              row.appendChild(delBtn);
-
-              modelsBox.appendChild(row);
-            });
-          });
-        };
-
-        // 重写打开设置的逻辑：基于上游模型查找当前渠道下的别名
-        window.openSettings = function (modelId, modelObj) {
-          currentBaseModelId = (modelObj && (modelObj.alias_for || modelObj.id)) || "";
-          const chName = (modelObj && modelObj.metadata && modelObj.metadata.channel) || "";
-
-          let aliasId = "";
-          let aliasCfg = null;
-          Object.entries(modelSettings || {}).some(([mid, cfg]) => {
-            if (!cfg || typeof cfg !== "object") return false;
-            if (cfg.targetModel === currentBaseModelId && cfg.channel === chName) {
-              aliasId = mid;
-              aliasCfg = cfg;
-              return true;
-            }
-            return false;
-          });
-
-          currentEditingModelId = aliasId;
-          settingsModelId.value = aliasId;
-          settingsTargetModel.value =
-            (aliasCfg && aliasCfg.targetModel) || currentBaseModelId || modelId;
-          settingsChannel.value = (aliasCfg && aliasCfg.channel) || chName;
-          updateSettingsLine();
-
-          Array.from(modelsBox.querySelectorAll(".model-item")).forEach((btn) => {
-            if (btn.dataset.modelId === modelId) btn.classList.add("active");
-            else btn.classList.remove("active");
-          });
-        };
+        await fetchCustomModels();
       })();
     </script>
   </body>

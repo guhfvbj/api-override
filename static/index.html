@@ -1,778 +1,720 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>newapi OpenAI 代理 · 模型管理</title>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NewAPI 代理管理</title>
     <style>
-      :root {
-        --bg: #0e1117;
-        --panel: #161b22;
-        --accent: #00c2ff;
-        --text: #e6edf3;
-        --muted: #9ca3af;
-        --border: #30363d;
-      }
-      * {
-        box-sizing: border-box;
-      }
-      body {
-        margin: 0;
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background:
-          radial-gradient(circle at 10% 20%, rgba(0, 194, 255, 0.12), transparent 35%),
-          radial-gradient(circle at 80% 0%, rgba(157, 107, 255, 0.18), transparent 35%),
-          var(--bg);
-        color: var(--text);
-        min-height: 100vh;
-        padding: 20px 12px;
-        display: flex;
-        justify-content: center;
-      }
-      .shell {
-        width: min(1100px, 100%);
-        background: rgba(22, 27, 34, 0.95);
-        border-radius: 14px;
-        border: 1px solid var(--border);
-        padding: 16px;
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-      }
-      header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-      .row {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 8px;
-      }
-      label {
-        font-size: 13px;
-        color: var(--muted);
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-      input,
-      select {
-        width: 100%;
-        border-radius: 8px;
-        border: 1px solid var(--border);
-        background: #010409;
-        color: var(--text);
-        font-size: 13px;
-        padding: 7px 9px;
-      }
-      button {
-        border-radius: 8px;
-        border: 1px solid var(--border);
-        background: #0a0f16;
-        color: var(--text);
-        padding: 7px 12px;
-        cursor: pointer;
-      }
-      button.secondary {
-        background: transparent;
-        color: var(--muted);
-      }
-      button.danger {
-        border-color: #ff6b6b;
-        color: #ff6b6b;
-      }
-      .panel {
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        background: #0d1117;
-        padding: 12px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-      .panel-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 8px;
-        color: var(--muted);
-        font-size: 13px;
-      }
-      .models-list {
-        max-height: 460px;
-        overflow: auto;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-      }
-      .alias-list {
-        max-height: 280px;
-        overflow: auto;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-      }
-      .model-row {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .model-item {
-        flex: 1;
-        text-align: left;
-        border-radius: 8px;
-        border: 1px solid var(--border);
-        background: #0a0f16;
-        color: var(--text);
-        font-size: 13px;
-        padding: 7px 9px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 8px;
-      }
-      .model-item .meta {
-        font-size: 11px;
-        color: var(--muted);
-      }
-      .note {
-        color: var(--muted);
-        font-size: 12px;
-      }
-      .log-box {
-        background: #0a0f16;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 8px;
-        height: 120px;
-        overflow: auto;
-        font-size: 12px;
-        color: var(--muted);
-      }
-      .modal-mask {
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.6);
-        display: none;
-        align-items: center;
-        justify-content: center;
-        z-index: 999;
-      }
-      .modal {
-        background: #0d1117;
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 14px;
-        width: min(720px, 90vw);
-        max-height: 80vh;
-        overflow: auto;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-      .import-list {
-        max-height: 420px;
-        overflow: auto;
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 6px;
-      }
-      .badge {
-        display: inline-block;
-        padding: 1px 6px;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        font-size: 11px;
-        color: var(--muted);
-      }
+        :root {
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #334155;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --danger: #ef4444;
+            --danger-hover: #dc2626;
+            --success: #10b981;
+            --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+        }
+
+        * { box-sizing: border-box; outline: none; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        h1 { margin: 0; font-size: 1.5rem; font-weight: 700; color: #0f172a; }
+        .subtitle { font-size: 0.875rem; color: var(--text-muted); margin-top: 4px; }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+            gap: 6px;
+        }
+        .btn-primary { background-color: var(--primary); color: white; }
+        .btn-primary:hover { background-color: var(--primary-hover); }
+        .btn-secondary { background-color: white; border-color: var(--border); color: var(--text-main); }
+        .btn-secondary:hover { background-color: #f1f5f9; }
+        .btn-danger { background-color: white; border-color: var(--border); color: var(--danger); }
+        .btn-danger:hover { background-color: #fef2f2; border-color: var(--danger); }
+        .btn-sm { padding: 4px 10px; font-size: 0.75rem; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Inputs */
+        input, select {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background-color: white;
+            font-size: 0.875rem;
+            color: var(--text-main);
+            width: 100%;
+            transition: border-color 0.2s;
+        }
+        input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1); }
+
+        /* Cards */
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .card-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: #f8fafc;
+        }
+        .card-title { font-weight: 600; font-size: 1rem; color: #0f172a; }
+        .card-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+
+        /* Grid Layout */
+        .grid-main {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 20px;
+            align-items: start;
+        }
+        @media (max-width: 768px) {
+            .grid-main { grid-template-columns: 1fr; }
+        }
+
+        /* Lists */
+        .list-group { display: flex; flex-direction: column; gap: 8px; }
+        .list-item {
+            background: white;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: transform 0.1s;
+        }
+        .list-item:hover { border-color: #cbd5e1; }
+        .item-content { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+        .item-title { font-weight: 500; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .item-meta { font-size: 0.75rem; color: var(--text-muted); display: flex; gap: 8px; align-items: center; }
+        
+        /* Badges */
+        .badge {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            background-color: #e2e8f0;
+            color: #475569;
+        }
+        .badge-blue { background-color: #dbeafe; color: #1e40af; }
+        .badge-green { background-color: #dcfce7; color: #166534; }
+        .badge-purple { background-color: #f3e8ff; color: #6b21a8; }
+
+        /* Modal */
+        .modal-mask {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+            display: none; align-items: center; justify-content: center; z-index: 50;
+            backdrop-filter: blur(2px);
+        }
+        .modal {
+            background: white; width: 90%; max-width: 800px; max-height: 85vh;
+            border-radius: 12px; display: flex; flex-direction: column;
+            box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+        }
+        .modal-body { padding: 20px; overflow-y: auto; }
+        .modal-footer { padding: 16px 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; background: #f8fafc; border-radius: 0 0 12px 12px; }
+
+        /* Toast */
+        .toast-container {
+            position: fixed; bottom: 20px; right: 20px; z-index: 100;
+            display: flex; flex-direction: column; gap: 10px;
+        }
+        .toast {
+            background: white; padding: 12px 16px; border-radius: 8px;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            border-left: 4px solid var(--primary);
+            font-size: 0.875rem; animation: slideIn 0.3s ease;
+            max-width: 300px;
+        }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+        /* Utility */
+        .flex-row { display: flex; gap: 10px; align-items: center; }
+        .flex-col { display: flex; flex-direction: column; gap: 10px; }
+        .text-sm { font-size: 0.875rem; }
+        .w-full { width: 100%; }
+        .mt-2 { margin-top: 8px; }
+        .mt-4 { margin-top: 16px; }
+        .hidden { display: none; }
     </style>
-  </head>
-  <body>
-    <div class="shell">
-      <header>
+</head>
+<body>
+
+<div class="container">
+    <header>
         <div>
-          <div style="font-weight:600;">模型管理</div>
-          <div class="note">仅持久化自定义模型，下游 /v1/models 只返回本列表</div>
+            <h1>NewAPI 代理管理</h1>
+            <div class="subtitle">管理上游渠道、模型映射与别名</div>
         </div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button id="refreshModelsBtn" class="secondary">刷新上游并导入</button>
-          <button id="saveCustomBtn">保存自定义模型</button>
+        <div class="flex-row">
+            <button id="refreshBtn" class="btn btn-secondary">
+                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                刷新数据
+            </button>
+            <button id="saveAllBtn" class="btn btn-primary">
+                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
+                保存所有更改
+            </button>
         </div>
-      </header>
+    </header>
 
-      <section class="panel">
-        <div class="panel-header">
-          <span>代理与鉴权</span>
+    <!-- Settings Bar -->
+    <div class="card">
+        <div class="card-body" style="padding: 12px 16px; flex-direction: row; align-items: center; gap: 16px; background: #fff;">
+            <div class="flex-row" style="flex: 1;">
+                <span class="text-sm" style="white-space: nowrap; color: var(--text-muted);">代理地址:</span>
+                <input id="endpoint" placeholder="http://localhost:14300" style="max-width: 250px;">
+                <span class="text-sm" style="white-space: nowrap; color: var(--text-muted);">密钥:</span>
+                <input id="proxyKey" type="password" placeholder="PROXY_API_KEY (可选)" style="max-width: 200px;">
+            </div>
+            <div class="text-sm" style="color: var(--success);" id="connectionStatus"></div>
         </div>
-        <div class="row">
-          <label>
-            代理地址
-            <input id="endpoint" placeholder="默认当前域名或 http://localhost:14300" />
-          </label>
-          <label>
-            代理密钥（可选）
-            <input id="proxyKey" placeholder="PROXY_API_KEY" />
-          </label>
-        </div>
-      </section>
+    </div>
 
-      <section class="panel">
-        <div class="panel-header">
-          <span>渠道与模型</span>
-          <div style="display:flex; gap:8px; align-items:center;">
-            <label style="margin:0; display:flex; align-items:center; gap:6px; color:var(--muted);">
-              渠道筛选
-              <select id="modelsChannelFilter">
-                <option value="">全部渠道</option>
-              </select>
+    <div class="grid-main">
+        <!-- Left Column: Channels -->
+        <div class="flex-col">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">上游渠道</span>
+                    <span class="badge badge-blue" id="channelCount">0</span>
+                </div>
+                <div class="card-body">
+                    <div id="channelList" class="list-group">
+                        <!-- Channels rendered here -->
+                        <div class="text-sm text-muted" style="text-align: center; padding: 20px;">暂无渠道</div>
+                    </div>
+                    
+                    <div style="border-top: 1px solid var(--border); padding-top: 16px;">
+                        <div class="text-sm" style="font-weight: 600; margin-bottom: 8px;">添加新渠道</div>
+                        <div class="flex-col">
+                            <input id="newChannelName" placeholder="渠道名称 (如: openai)">
+                            <input id="newChannelBaseUrl" placeholder="Base URL (如: https://api.openai.com)">
+                            <input id="newChannelKey" placeholder="API Key (sk-...)">
+                            <button id="addChannelBtn" class="btn btn-secondary w-full">添加渠道</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Models -->
+        <div class="flex-col">
+            <div class="card">
+                <div class="card-header">
+                    <div class="flex-row">
+                        <span class="card-title">模型列表</span>
+                        <select id="channelFilter" style="width: auto; padding: 4px 8px; font-size: 0.8rem;">
+                            <option value="">全部渠道</option>
+                        </select>
+                    </div>
+                    <div class="flex-row">
+                        <button id="importBtn" class="btn btn-sm btn-secondary">从上游导入</button>
+                        <button id="addModelBtn" class="btn btn-sm btn-secondary">手动添加</button>
+                        <button id="addAliasBtn" class="btn btn-sm btn-secondary">添加别名</button>
+                    </div>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div id="modelList" class="list-group" style="max-height: 600px; overflow-y: auto; padding: 16px;">
+                        <!-- Models rendered here -->
+                        <div class="text-sm text-muted" style="text-align: center; padding: 40px;">
+                            暂无模型，请从上游导入或手动添加
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Import Modal -->
+<div id="importModal" class="modal-mask">
+    <div class="modal">
+        <div class="card-header">
+            <span class="card-title">从上游导入模型</span>
+            <button class="btn btn-sm btn-secondary" onclick="closeModal('importModal')">✕</button>
+        </div>
+        <div class="modal-body">
+            <div class="flex-row" style="margin-bottom: 16px;">
+                <span class="text-sm">目标渠道:</span>
+                <select id="importTargetChannel" style="max-width: 200px;"></select>
+                <button id="fetchUpstreamBtn" class="btn btn-sm btn-primary">拉取列表</button>
+            </div>
+            <div id="importList" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
+                <div class="text-sm text-muted">请选择渠道并点击拉取列表...</div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="selectAllImport">全选</button>
+            <button class="btn btn-secondary" id="clearImport">清空</button>
+            <button class="btn btn-primary" id="confirmImport">确认导入</button>
+        </div>
+    </div>
+</div>
+
+<!-- Add Alias Modal -->
+<div id="aliasModal" class="modal-mask">
+    <div class="modal" style="max-width: 500px;">
+        <div class="card-header">
+            <span class="card-title">添加/修改别名</span>
+            <button class="btn btn-sm btn-secondary" onclick="closeModal('aliasModal')">✕</button>
+        </div>
+        <div class="modal-body flex-col">
+            <label class="text-sm">
+                别名 ID (客户端请求的模型名)
+                <input id="aliasId" placeholder="例如: gpt-4-turbo">
             </label>
-            <button id="addModelBtn" class="secondary" disabled>在当前渠道添加模型</button>
-          </div>
+            <label class="text-sm">
+                目标模型 ID (上游实际模型名)
+                <input id="aliasTarget" placeholder="例如: gpt-4-0125-preview">
+            </label>
+            <label class="text-sm">
+                所属渠道
+                <select id="aliasChannelSelect"></select>
+            </label>
         </div>
-        <div id="modelsBox" class="models-list">
-          <div class="note">点击左上角“刷新上游并导入”可从上游选择模型加入列表。</div>
+        <div class="modal-footer">
+            <button class="btn btn-primary" id="saveAliasBtn">保存别名</button>
         </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <span>模型别名 / 重定向（覆盖 /overrides）</span>
-          <span class="note">设置别名 -> 上游目标模型 + 渠道</span>
-        </div>
-        <div class="row">
-          <label>
-            别名模型 ID（必填）
-            <input id="aliasModelId" placeholder="如：gpt-4o-local" />
-          </label>
-          <label>
-            目标模型 ID（必填）
-            <input id="aliasTargetModel" placeholder="上游实际模型 ID" />
-          </label>
-          <label>
-            渠道（必填）
-            <input id="aliasChannel" placeholder="如：default" />
-          </label>
-        </div>
-        <div style="display:flex; gap:8px; justify-content:flex-end;">
-          <button id="saveAliasBtn">保存/更新别名</button>
-          <button id="deleteAliasBtn" class="danger">删除别名</button>
-        </div>
-        <div id="aliasList" class="alias-list note">暂无别名，可上方添加。</div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <span>渠道配置（UPSTREAM_CHANNELS）</span>
-          <span class="note">保存后同步到 .env</span>
-        </div>
-        <div id="channelList" class="note">暂无渠道</div>
-        <div class="row">
-          <label>
-            渠道名称
-            <input id="newChannelName" placeholder="如：newapi / copilot" />
-          </label>
-          <label>
-            上游地址 base_url
-            <input id="newChannelBaseUrl" placeholder="https://api.xxx.com" />
-          </label>
-          <label>
-            上游密钥 api_key
-            <input id="newChannelKey" placeholder="sk-xxxx" />
-          </label>
-        </div>
-        <div style="display:flex; justify-content:flex-end; gap:8px;">
-          <button id="addChannelBtn">保存渠道</button>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <span>日志</span>
-        </div>
-        <div id="logBox" class="log-box"></div>
-        <div id="statusLine" class="note"></div>
-      </section>
     </div>
+</div>
 
-    <div id="importMask" class="modal-mask">
-      <div class="modal">
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-          <div>
-            <div style="font-weight:600;">从上游导入模型</div>
-            <div class="note">勾选要导入的模型，导入到当前渠道</div>
-          </div>
-          <button id="closeImportBtn" class="secondary">关闭</button>
-        </div>
-        <div id="importInfo" class="note"></div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button id="selectAllImportBtn" class="secondary">全选</button>
-          <button id="clearImportBtn" class="secondary">全清</button>
-          <button id="confirmImportBtn">导入选中</button>
-        </div>
-        <div id="importList" class="import-list"></div>
-      </div>
-    </div>
+<div class="toast-container" id="toastContainer"></div>
 
-    <script>
-      const endpointInput = document.getElementById("endpoint");
-      const proxyKeyInput = document.getElementById("proxyKey");
-      const refreshModelsBtn = document.getElementById("refreshModelsBtn");
-      const saveCustomBtn = document.getElementById("saveCustomBtn");
-      const modelsChannelFilter = document.getElementById("modelsChannelFilter");
-      const modelsBox = document.getElementById("modelsBox");
-      const addModelBtn = document.getElementById("addModelBtn");
-      const channelList = document.getElementById("channelList");
-      const newChannelName = document.getElementById("newChannelName");
-      const newChannelBaseUrl = document.getElementById("newChannelBaseUrl");
-      const newChannelKey = document.getElementById("newChannelKey");
-      const addChannelBtn = document.getElementById("addChannelBtn");
-      const logBox = document.getElementById("logBox");
-      const statusLine = document.getElementById("statusLine");
-      const aliasModelId = document.getElementById("aliasModelId");
-      const aliasTargetModel = document.getElementById("aliasTargetModel");
-      const aliasChannel = document.getElementById("aliasChannel");
-      const saveAliasBtn = document.getElementById("saveAliasBtn");
-      const deleteAliasBtn = document.getElementById("deleteAliasBtn");
-      const aliasList = document.getElementById("aliasList");
-      const importMask = document.getElementById("importMask");
-      const importList = document.getElementById("importList");
-      const importInfo = document.getElementById("importInfo");
-      const closeImportBtn = document.getElementById("closeImportBtn");
-      const selectAllImportBtn = document.getElementById("selectAllImportBtn");
-      const clearImportBtn = document.getElementById("clearImportBtn");
-      const confirmImportBtn = document.getElementById("confirmImportBtn");
+<script>
+    // State
+    let state = {
+        channels: {},
+        models: {}, // { channelName: [modelObjects] }
+        upstreamModels: []
+    };
 
-      const defaultOrigin = window.location.origin.startsWith("http")
-        ? window.location.origin
-        : "http://localhost:14300";
+    // DOM Elements
+    const els = {
+        endpoint: document.getElementById('endpoint'),
+        proxyKey: document.getElementById('proxyKey'),
+        channelList: document.getElementById('channelList'),
+        modelList: document.getElementById('modelList'),
+        channelFilter: document.getElementById('channelFilter'),
+        importTargetChannel: document.getElementById('importTargetChannel'),
+        aliasChannelSelect: document.getElementById('aliasChannelSelect'),
+        importList: document.getElementById('importList'),
+        channelCount: document.getElementById('channelCount')
+    };
 
-      let modelStore = {}; // 统一存储 {channel: [models 或 alias]}
-      let upstreamChannels = {};
-      let upstreamImportList = [];
+    // Utils
+    const toast = (msg, type = 'info') => {
+        const div = document.createElement('div');
+        div.className = 'toast';
+        div.textContent = msg;
+        div.style.borderLeftColor = type === 'error' ? 'var(--danger)' : (type === 'success' ? 'var(--success)' : 'var(--primary)');
+        document.getElementById('toastContainer').appendChild(div);
+        setTimeout(() => {
+            div.style.opacity = '0';
+            div.style.transform = 'translateX(100%)';
+            setTimeout(() => div.remove(), 300);
+        }, 3000);
+    };
 
-      function log(msg) {
-        const now = new Date().toLocaleTimeString();
-        const div = document.createElement("div");
-        div.textContent = `[${now}] ${msg}`;
-        logBox.appendChild(div);
-        logBox.scrollTop = logBox.scrollHeight;
-      }
-
-      function setStatus(text) {
-        statusLine.textContent = text || "";
-        if (text) log(text);
-      }
-
-      function buildHeaders() {
-        const headers = { "Content-Type": "application/json" };
-        const key = proxyKeyInput.value.trim() || localStorage.getItem("proxy_key") || "";
-        if (key) headers["Authorization"] = `Bearer ${key}`;
+    const getHeaders = () => {
+        const headers = { 'Content-Type': 'application/json' };
+        const key = els.proxyKey.value.trim();
+        if (key) headers['Authorization'] = `Bearer ${key}`;
         return headers;
-      }
+    };
 
-      function currentEndpoint() {
-        return endpointInput.value.trim() || localStorage.getItem("proxy_endpoint") || defaultOrigin;
-      }
+    const getBaseUrl = () => {
+        let url = els.endpoint.value.trim();
+        if (!url) url = window.location.origin;
+        return url.replace(/\/$/, '');
+    };
 
-      function saveEndpointAndKey() {
-        const ep = endpointInput.value.trim() || defaultOrigin;
-        const key = proxyKeyInput.value.trim();
-        localStorage.setItem("proxy_endpoint", ep);
-        localStorage.setItem("proxy_key", key);
-      }
-
-      function hydrateEndpointAndKey() {
-        const ep = localStorage.getItem("proxy_endpoint") || defaultOrigin;
-        const key = localStorage.getItem("proxy_key") || "";
-        endpointInput.value = ep;
-        proxyKeyInput.value = key;
-      }
-
-      function currentChannel() {
-        return modelsChannelFilter.value || "";
-      }
-
-      function renderChannelOptions() {
-        modelsChannelFilter.innerHTML = "";
-        const allOpt = document.createElement("option");
-        allOpt.value = "";
-        allOpt.textContent = "全部渠道";
-        modelsChannelFilter.appendChild(allOpt);
-        Object.keys(upstreamChannels || {}).forEach((name) => {
-          const opt = document.createElement("option");
-          opt.value = name;
-          opt.textContent = name;
-          modelsChannelFilter.appendChild(opt);
-        });
-        // 补充存储中已有的渠道
-        Object.keys(modelStore || {}).forEach((name) => {
-          if (!name) return;
-          if ([...modelsChannelFilter.options].some((o) => o.value === name)) return;
-          const opt = document.createElement("option");
-          opt.value = name;
-          opt.textContent = name;
-          modelsChannelFilter.appendChild(opt);
-        });
-      }
-
-      function renderChannels() {
-        const entries = Object.entries(upstreamChannels || {});
-        if (!entries.length) {
-          channelList.textContent = "暂无渠道，请在下方添加。";
-        } else {
-          channelList.textContent = entries
-            .map(([name, cfg]) => `${name} (${cfg.base_url || "未配置地址"})`)
-            .join(" · ");
-        }
-        renderChannelOptions();
-      }
-
-      function renderModelList() {
-        const list = [];
-        Object.entries(modelStore || {}).forEach(([ch, items]) => {
-          if (!Array.isArray(items)) return;
-          items.forEach((m) => {
-            if (!m || typeof m !== "object") return;
-            list.push({ ...m, __channel: ch });
-          });
-        });
-
-        const filterCh = currentChannel();
-        const groups = {};
-        list.forEach((item) => {
-          const ch = item.__channel || "";
-          if (filterCh && ch !== filterCh) return;
-          const key = ch || "未指定渠道";
-          if (!groups[key]) groups[key] = [];
-          groups[key].push(item);
-        });
-
-        modelsBox.textContent = "";
-        if (!Object.keys(groups).length) {
-          modelsBox.textContent = "暂无自定义模型。可在上方选择渠道并点击“添加模型”或刷新上游导入。";
-          return;
-        }
-
-        Object.entries(groups).forEach(([ch, items]) => {
-          const header = document.createElement("div");
-          header.className = "note";
-          header.textContent = `渠道：${ch}`;
-          modelsBox.appendChild(header);
-
-          items.forEach((item) => {
-            const row = document.createElement("div");
-            row.className = "model-row";
-
-            const btn = document.createElement("div");
-            btn.className = "model-item";
-            const main = document.createElement("span");
-            main.textContent = item.id;
-            const meta = document.createElement("span");
-            meta.className = "meta";
-            const metaParts = [];
-            if (item.alias_for) metaParts.push(`别名 → ${item.alias_for}`);
-            metaParts.push(`owned_by=${item.owned_by || "local"}`);
-            if (item.metadata && item.metadata.channel) metaParts.push(`channel=${item.metadata.channel}`);
-            meta.textContent = metaParts.join(" · ");
-            btn.appendChild(main);
-            btn.appendChild(meta);
-            row.appendChild(btn);
-
-            const delBtn = document.createElement("button");
-            delBtn.type = "button";
-            delBtn.className = "danger";
-            delBtn.textContent = "删除";
-            delBtn.onclick = () => {
-              removeCustomModel(item.__channel || "", item.id);
-            };
-            row.appendChild(delBtn);
-
-            modelsBox.appendChild(row);
-          });
-        });
-      }
-
-      function renderAliasList() {
-        const list = [];
-        Object.entries(modelStore || {}).forEach(([ch, items]) => {
-          if (!Array.isArray(items)) return;
-          items.forEach((m) => {
-            if (!m || typeof m !== "object") return;
-            if (!m.alias_for) return;
-            list.push({ ...m, __channel: ch });
-          });
-        });
-        aliasList.textContent = "";
-        if (!list.length) {
-          aliasList.textContent = "暂无别名，可在上方添加。";
-          return;
-        }
-        list.forEach((m) => {
-          const row = document.createElement("div");
-          row.className = "model-row";
-          const text = document.createElement("div");
-          text.className = "model-item";
-          text.style.cursor = "pointer";
-          const meta = document.createElement("span");
-          meta.className = "meta";
-          meta.textContent = `→ ${m.alias_for} · channel=${m.__channel || ""}`;
-          const main = document.createElement("span");
-          main.textContent = m.id;
-          text.appendChild(main);
-          text.appendChild(meta);
-          text.onclick = () => {
-            aliasModelId.value = m.id;
-            aliasTargetModel.value = m.alias_for || "";
-            aliasChannel.value = m.__channel || "";
-          };
-          row.appendChild(text);
-          const delBtn = document.createElement("button");
-          delBtn.className = "danger";
-          delBtn.textContent = "删除";
-          delBtn.onclick = () => deleteAlias(m.id, m.__channel || "");
-          row.appendChild(delBtn);
-          aliasList.appendChild(row);
-        });
-      }
-
-      function removeCustomModel(channel, modelId) {
-        if (!customModels[channel]) return;
-        modelStore[channel] = modelStore[channel].filter((m) => m && m.id !== modelId);
-        if (modelStore[channel].length === 0) delete modelStore[channel];
-        renderModelList();
-        setStatus(`已删除模型 ${modelId}（渠道=${channel || "未指定"}），记得点击“保存自定义模型”。`);
-      }
-
-      function addCustomModel(channel, modelId, owned_by = "local", alias_for = "") {
-        if (!modelStore[channel]) modelStore[channel] = [];
-        // 去重
-        modelStore[channel] = modelStore[channel].filter((m) => m && m.id !== modelId);
-        const meta = channel ? { channel } : undefined;
-        const obj = { id: modelId, object: "model", owned_by: owned_by || "local" };
-        if (alias_for) obj.alias_for = alias_for;
-        if (meta) obj.metadata = meta;
-        modelStore[channel].push(obj);
-        renderModelList();
-      }
-
-      async function fetchCustomModels() {
-        const endpoint = currentEndpoint();
+    // API Interactions
+    async function fetchChannels() {
         try {
-          const resp = await fetch(`${endpoint}/custom-models`, { headers: buildHeaders() });
-          const data = await resp.json();
-          if (!resp.ok) throw new Error(JSON.stringify(data));
-          modelStore = data || {};
-          renderChannelOptions();
-          renderModelList();
-          setStatus("已加载模型存储列表。");
-        } catch (err) {
-          setStatus(`获取自定义模型失败：${err}`);
+            const res = await fetch(`${getBaseUrl()}/channels`, { headers: getHeaders() });
+            if (!res.ok) throw new Error('Failed to fetch channels');
+            const data = await res.json();
+            state.channels = data.channels || {};
+            renderChannels();
+            updateChannelSelects();
+        } catch (e) {
+            toast('获取渠道失败: ' + e.message, 'error');
         }
-      }
+    }
 
-      async function saveModelStore() {
-        const endpoint = currentEndpoint();
+    async function fetchModels() {
         try {
-          const resp = await fetch(`${endpoint}/custom-models`, {
-            method: "POST",
-            headers: buildHeaders(),
-            body: JSON.stringify(modelStore || {}),
-          });
-          const data = await resp.json();
-          if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
-          setStatus(`模型存储已保存，共 ${data.count || 0} 条。`);
-        } catch (err) {
-          setStatus(`保存模型存储失败：${err}`);
+            const res = await fetch(`${getBaseUrl()}/custom-models`, { headers: getHeaders() });
+            if (!res.ok) throw new Error('Failed to fetch models');
+            state.models = await res.json() || {};
+            renderModels();
+        } catch (e) {
+            toast('获取模型失败: ' + e.message, 'error');
         }
-      }
+    }
 
-      async function fetchChannels() {
-        const endpoint = currentEndpoint();
+    async function saveChannels() {
         try {
-          const resp = await fetch(`${endpoint}/channels`, { headers: buildHeaders() });
-          const data = await resp.json();
-          if (!resp.ok) throw new Error(JSON.stringify(data));
-          upstreamChannels = data.channels || {};
-          renderChannels();
-        } catch (err) {
-          setStatus(`获取渠道失败：${err}`);
+            const res = await fetch(`${getBaseUrl()}/channels`, {
+                method: 'POST',
+                headers: getHeaders(),
+                body: JSON.stringify({ channels: state.channels })
+            });
+            if (!res.ok) throw new Error('Failed to save channels');
+            toast('渠道配置已保存', 'success');
+        } catch (e) {
+            toast('保存渠道失败: ' + e.message, 'error');
         }
-      }
+    }
 
-      async function saveChannelsToServer(channelsObj) {
-        const endpoint = currentEndpoint();
-        const resp = await fetch(`${endpoint}/channels`, {
-          method: "POST",
-          headers: buildHeaders(),
-          body: JSON.stringify({ channels: channelsObj }),
+    async function saveModels() {
+        try {
+            const res = await fetch(`${getBaseUrl()}/custom-models`, {
+                method: 'POST',
+                headers: getHeaders(),
+                body: JSON.stringify(state.models)
+            });
+            if (!res.ok) throw new Error('Failed to save models');
+            toast('模型配置已保存', 'success');
+        } catch (e) {
+            toast('保存模型失败: ' + e.message, 'error');
+        }
+    }
+
+    // Rendering
+    function renderChannels() {
+        els.channelList.innerHTML = '';
+        const names = Object.keys(state.channels);
+        els.channelCount.textContent = names.length;
+        
+        if (names.length === 0) {
+            els.channelList.innerHTML = '<div class="text-sm text-muted" style="text-align: center; padding: 20px;">暂无渠道</div>';
+            return;
+        }
+
+        names.forEach(name => {
+            const ch = state.channels[name];
+            const div = document.createElement('div');
+            div.className = 'list-item';
+            div.innerHTML = `
+                <div class="item-content">
+                    <div class="item-title">${name}</div>
+                    <div class="item-meta" title="${ch.base_url}">${ch.base_url || 'No URL'}</div>
+                </div>
+                <button class="btn btn-sm btn-danger" onclick="deleteChannel('${name}')">删除</button>
+            `;
+            els.channelList.appendChild(div);
         });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
-        upstreamChannels = channelsObj;
+    }
+
+    function updateChannelSelects() {
+        const options = Object.keys(state.channels).map(c => `<option value="${c}">${c}</option>`).join('');
+        const allOptions = `<option value="">全部渠道</option>` + options;
+        
+        // Preserve selection if possible
+        const currentFilter = els.channelFilter.value;
+        els.channelFilter.innerHTML = allOptions;
+        els.channelFilter.value = currentFilter;
+
+        els.importTargetChannel.innerHTML = options;
+        els.aliasChannelSelect.innerHTML = options;
+    }
+
+    function renderModels() {
+        els.modelList.innerHTML = '';
+        const filter = els.channelFilter.value;
+        let hasModels = false;
+
+        Object.entries(state.models).forEach(([channel, models]) => {
+            if (filter && channel !== filter) return;
+            if (!Array.isArray(models) || models.length === 0) return;
+
+            // Channel Header
+            if (!filter) {
+                const header = document.createElement('div');
+                header.style.padding = '8px 0 4px 0';
+                header.style.fontWeight = '600';
+                header.style.fontSize = '0.85rem';
+                header.style.color = 'var(--text-muted)';
+                header.textContent = `渠道: ${channel}`;
+                els.modelList.appendChild(header);
+            }
+
+            models.forEach(m => {
+                hasModels = true;
+                const div = document.createElement('div');
+                div.className = 'list-item';
+                
+                let badges = `<span class="badge badge-blue">${channel}</span>`;
+                let meta = `ID: ${m.id}`;
+                
+                if (m.alias_for) {
+                    badges += ` <span class="badge badge-purple">别名</span>`;
+                    meta += ` → 指向: ${m.alias_for}`;
+                } else {
+                    badges += ` <span class="badge badge-green">模型</span>`;
+                }
+
+                div.innerHTML = `
+                    <div class="item-content">
+                        <div class="flex-row" style="gap: 6px;">
+                            <span class="item-title">${m.id}</span>
+                            ${badges}
+                        </div>
+                        <div class="item-meta">${meta}</div>
+                    </div>
+                    <button class="btn btn-sm btn-danger" onclick="deleteModel('${channel}', '${m.id}')">删除</button>
+                `;
+                els.modelList.appendChild(div);
+            });
+        });
+
+        if (!hasModels) {
+            els.modelList.innerHTML = '<div class="text-sm text-muted" style="text-align: center; padding: 40px;">暂无模型</div>';
+        }
+    }
+
+    // Actions
+    window.deleteChannel = (name) => {
+        if (!confirm(`确定删除渠道 ${name} 吗?`)) return;
+        delete state.channels[name];
         renderChannels();
-      }
+        updateChannelSelects();
+        toast('渠道已删除 (记得保存)', 'info');
+    };
 
-      async function fetchUpstreamModels() {
-        const endpoint = currentEndpoint();
-        const ch = currentChannel();
-        let url = `${endpoint}/v1/upstream-models`;
-        if (ch) url += `?channel=${encodeURIComponent(ch)}`;
-        setStatus("正在拉取上游模型...");
-        const resp = await fetch(url, { headers: buildHeaders() });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(JSON.stringify(data));
-        return data.data || [];
-      }
+    window.deleteModel = (channel, id) => {
+        if (!confirm(`确定删除模型 ${id} 吗?`)) return;
+        state.models[channel] = state.models[channel].filter(m => m.id !== id);
+        if (state.models[channel].length === 0) delete state.models[channel];
+        renderModels();
+        toast('模型已删除 (记得保存)', 'info');
+    };
 
-      function openImportModal(list, ch) {
-        upstreamImportList = list || [];
-        importInfo.textContent = `当前渠道：${ch || "未指定"} · 上游模型数：${upstreamImportList.length}`;
-        importList.innerHTML = "";
-        upstreamImportList.forEach((m, idx) => {
-          const wrap = document.createElement("label");
-          wrap.style.display = "flex";
-          wrap.style.alignItems = "center";
-          wrap.style.gap = "6px";
-          wrap.style.border = `1px solid var(--border)`;
-          wrap.style.padding = "6px";
-          wrap.style.borderRadius = "8px";
-          const cb = document.createElement("input");
-          cb.type = "checkbox";
-          cb.dataset.idx = idx;
-          const text = document.createElement("div");
-          text.style.display = "flex";
-          text.style.flexDirection = "column";
-          text.innerHTML = `<strong>${m.id}</strong><span class="note">owned_by=${m.owned_by || ""}${
-            m.alias_for ? ` · alias_for=${m.alias_for}` : ""
-          }${m.metadata && m.metadata.channel ? ` · channel=${m.metadata.channel}` : ""}</span>`;
-          wrap.appendChild(cb);
-          wrap.appendChild(text);
-          importList.appendChild(wrap);
-        });
-        importMask.style.display = "flex";
-      }
+    window.closeModal = (id) => {
+        document.getElementById(id).style.display = 'none';
+    };
 
-      refreshModelsBtn.onclick = async () => {
-        saveEndpointAndKey();
-        try {
-          const upstreamList = await fetchUpstreamModels();
-          openImportModal(upstreamList, currentChannel() || "");
-        } catch (err) {
-          setStatus(`刷新上游失败：${err}`);
-        }
-      };
+    // Event Listeners
+    document.getElementById('addChannelBtn').onclick = () => {
+        const name = document.getElementById('newChannelName').value.trim();
+        const url = document.getElementById('newChannelBaseUrl').value.trim();
+        const key = document.getElementById('newChannelKey').value.trim();
 
-      addModelBtn.onclick = () => {
-        const ch = currentChannel() || "";
-        const id = prompt(`输入要添加的模型 ID（渠道：${ch || "未指定"}）`);
-        if (!id) return;
-        addCustomModel(ch, id.trim());
-        setStatus(`已添加本地模型 ${id}（渠道=${ch || "未指定"}），记得保存。`);
-      };
+        if (!name || !url || !key) return toast('请填写完整渠道信息', 'error');
+        
+        state.channels[name] = { base_url: url, api_key: key };
+        renderChannels();
+        updateChannelSelects();
+        
+        document.getElementById('newChannelName').value = '';
+        document.getElementById('newChannelBaseUrl').value = '';
+        document.getElementById('newChannelKey').value = '';
+        toast('渠道已添加 (记得保存)', 'success');
+    };
 
-      saveCustomBtn.onclick = () => {
-        saveEndpointAndKey();
-        saveModelStore();
-      };
-
-      modelsChannelFilter.onchange = () => {
-        renderModelList();
-        addModelBtn.disabled = currentChannel() === "";
-      };
-
-      addChannelBtn.onclick = async () => {
-        const name = newChannelName.value.trim();
-        const baseUrl = newChannelBaseUrl.value.trim();
-        const apiKey = newChannelKey.value.trim();
-        if (!name || !baseUrl || !apiKey) {
-          setStatus("请完整填写渠道名称、地址和密钥。");
-          return;
-        }
-        const next = { ...(upstreamChannels || {}) };
-        next[name] = { base_url: baseUrl, api_key: apiKey };
-        try {
-          await saveChannelsToServer(next);
-        } catch (err) {
-          setStatus(`保存渠道失败：${err}`);
-          return;
-        }
-        newChannelName.value = "";
-        newChannelBaseUrl.value = "";
-        newChannelKey.value = "";
-        setStatus(`渠道 ${name} 已更新并同步到 .env（UPSTREAM_CHANNELS）。`);
-      };
-
-      (async function init() {
-        hydrateEndpointAndKey();
-        addModelBtn.disabled = true;
+    document.getElementById('refreshBtn').onclick = async () => {
         await fetchChannels();
-        await fetchCustomModels();
-      })();
+        await fetchModels();
+        toast('数据已刷新', 'success');
+    };
 
-      closeImportBtn.onclick = () => {
-        importMask.style.display = "none";
-      };
-      selectAllImportBtn.onclick = () => {
-        importList.querySelectorAll("input[type=checkbox]").forEach((cb) => (cb.checked = true));
-      };
-      clearImportBtn.onclick = () => {
-        importList.querySelectorAll("input[type=checkbox]").forEach((cb) => (cb.checked = false));
-      };
-      confirmImportBtn.onclick = () => {
-        const ch = currentChannel() || "";
-        const checked = Array.from(importList.querySelectorAll("input[type=checkbox]")).filter((cb) => cb.checked);
-        if (!checked.length) {
-          alert("未选择任何模型。");
-          return;
+    document.getElementById('saveAllBtn').onclick = async () => {
+        await saveChannels();
+        await saveModels();
+    };
+
+    els.channelFilter.onchange = renderModels;
+
+    // Import Logic
+    document.getElementById('importBtn').onclick = () => {
+        document.getElementById('importModal').style.display = 'flex';
+        updateChannelSelects();
+    };
+
+    document.getElementById('fetchUpstreamBtn').onclick = async () => {
+        const channel = els.importTargetChannel.value;
+        if (!channel) return toast('请先选择目标渠道', 'error');
+        
+        try {
+            const res = await fetch(`${getBaseUrl()}/v1/upstream-models?channel=${encodeURIComponent(channel)}`, { headers: getHeaders() });
+            if (!res.ok) throw new Error('Failed to fetch upstream models');
+            const data = await res.json();
+            state.upstreamModels = data.data || [];
+            
+            els.importList.innerHTML = '';
+            state.upstreamModels.forEach((m, idx) => {
+                const div = document.createElement('label');
+                div.className = 'list-item';
+                div.style.cursor = 'pointer';
+                div.innerHTML = `
+                    <input type="checkbox" value="${idx}" style="width: auto; margin-right: 10px;">
+                    <div class="item-content">
+                        <div class="item-title">${m.id}</div>
+                        <div class="item-meta">${m.owned_by}</div>
+                    </div>
+                `;
+                els.importList.appendChild(div);
+            });
+        } catch (e) {
+            toast('拉取失败: ' + e.message, 'error');
         }
-        checked.forEach((cb) => {
-          const idx = Number(cb.dataset.idx);
-          const m = upstreamImportList[idx];
-          if (m) addCustomModel(ch, m.id, m.owned_by || "local", m.alias_for || "");
+    };
+
+    document.getElementById('selectAllImport').onclick = () => {
+        document.querySelectorAll('#importList input[type=checkbox]').forEach(cb => cb.checked = true);
+    };
+    document.getElementById('clearImport').onclick = () => {
+        document.querySelectorAll('#importList input[type=checkbox]').forEach(cb => cb.checked = false);
+    };
+
+    document.getElementById('confirmImport').onclick = () => {
+        const channel = els.importTargetChannel.value;
+        if (!channel) return;
+        
+        const selectedIdxs = Array.from(document.querySelectorAll('#importList input[type=checkbox]:checked')).map(cb => cb.value);
+        if (selectedIdxs.length === 0) return toast('未选择任何模型', 'error');
+
+        if (!state.models[channel]) state.models[channel] = [];
+        
+        let count = 0;
+        selectedIdxs.forEach(idx => {
+            const m = state.upstreamModels[idx];
+            // Check duplicate
+            if (!state.models[channel].find(ex => ex.id === m.id)) {
+                state.models[channel].push({
+                    id: m.id,
+                    object: 'model',
+                    owned_by: m.owned_by || 'upstream',
+                    metadata: { channel }
+                });
+                count++;
+            }
         });
-        importMask.style.display = "none";
-        setStatus(`已导入 ${checked.length} 个模型到渠道 ${ch || "未指定"}，记得保存。`);
-      };
 
-      saveAliasBtn.onclick = () => {
-        const id = aliasModelId.value.trim();
-        const target = aliasTargetModel.value.trim();
-        const ch = aliasChannel.value.trim();
-        if (!id || !target || !ch) {
-          setStatus("请填写别名、目标模型与渠道。");
-          return;
-        }
-        addCustomModel(ch, id, "proxy-override", target);
-        renderAliasList();
-        setStatus(`别名 ${id} 已添加到存储，记得保存。`);
-      };
+        renderModels();
+        closeModal('importModal');
+        toast(`已导入 ${count} 个模型 (记得保存)`, 'success');
+    };
 
-      function deleteAlias(id, ch) {
-        const channel = ch || "";
-        if (!modelStore[channel]) {
-          setStatus("别名不存在。");
-          return;
-        }
-        modelStore[channel] = modelStore[channel].filter((m) => !(m.alias_for && m.id === id));
-        if (modelStore[channel].length === 0) delete modelStore[channel];
-        renderAliasList();
-        renderModelList();
-        setStatus(`别名 ${id} 已删除，记得保存。`);
-      }
+    // Add Model Logic
+    document.getElementById('addModelBtn').onclick = () => {
+        const channel = els.channelFilter.value;
+        if (!channel) return toast('请先在左上角选择一个渠道', 'error');
+        
+        const id = prompt('请输入模型 ID:');
+        if (!id) return;
 
-      deleteAliasBtn.onclick = () => {
-        const id = aliasModelId.value.trim();
-        const ch = aliasChannel.value.trim();
-        if (!id || !ch) {
-          setStatus("请先填写要删除的别名及渠道。");
-          return;
-        }
-        deleteAlias(id, ch);
-      };
-    </script>
-  </body>
+        if (!state.models[channel]) state.models[channel] = [];
+        state.models[channel].push({
+            id: id,
+            object: 'model',
+            owned_by: 'custom',
+            metadata: { channel }
+        });
+        renderModels();
+        toast('模型已添加 (记得保存)', 'success');
+    };
+
+    // Alias Logic
+    document.getElementById('addAliasBtn').onclick = () => {
+        document.getElementById('aliasModal').style.display = 'flex';
+        updateChannelSelects();
+    };
+
+    document.getElementById('saveAliasBtn').onclick = () => {
+        const id = document.getElementById('aliasId').value.trim();
+        const target = document.getElementById('aliasTarget').value.trim();
+        const channel = document.getElementById('aliasChannelSelect').value;
+
+        if (!id || !target || !channel) return toast('请填写完整信息', 'error');
+
+        if (!state.models[channel]) state.models[channel] = [];
+        
+        // Remove existing if any
+        state.models[channel] = state.models[channel].filter(m => m.id !== id);
+        
+        state.models[channel].push({
+            id: id,
+            object: 'model',
+            owned_by: 'proxy-override',
+            alias_for: target,
+            metadata: { channel }
+        });
+
+        renderModels();
+        closeModal('aliasModal');
+        toast('别名已添加 (记得保存)', 'success');
+    };
+
+    // Init
+    (async function init() {
+        // Load local storage
+        const savedEp = localStorage.getItem('proxy_endpoint');
+        const savedKey = localStorage.getItem('proxy_key');
+        if (savedEp) els.endpoint.value = savedEp;
+        if (savedKey) els.proxyKey.value = savedKey;
+
+        // Auto save settings on change
+        els.endpoint.onchange = () => localStorage.setItem('proxy_endpoint', els.endpoint.value.trim());
+        els.proxyKey.onchange = () => localStorage.setItem('proxy_key', els.proxyKey.value.trim());
+
+        await fetchChannels();
+        await fetchModels();
+    })();
+
+</script>
+</body>
 </html>

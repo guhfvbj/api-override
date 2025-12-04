@@ -361,7 +361,20 @@ async def save_custom_models(
 
     request.app.state.model_store = incoming
     persist_model_store(incoming)
-    logger.info("模型存储已更新：%s", sum(len(v) for v in incoming.values()))
+
+    # 同步更新覆写规则 (OverrideMap)
+    new_overrides: Dict[str, OverrideRule] = {}
+    for ch, items in incoming.items():
+        for it in items:
+            mid = it.get("id")
+            alias_for = it.get("alias_for")
+            if mid and alias_for:
+                new_overrides[mid] = OverrideRule(channel=ch, target_model=alias_for)
+    
+    request.app.state.override_map = new_overrides
+    persist_overrides(new_overrides)
+
+    logger.info("模型存储已更新：%s，覆写规则已同步：%s", sum(len(v) for v in incoming.values()), len(new_overrides))
     return JSONResponse(content={"status": "ok", "count": sum(len(v) for v in incoming.values())})
 
 

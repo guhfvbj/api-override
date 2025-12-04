@@ -31,84 +31,97 @@ def inject_thinking_system_prefix(messages: Any, prefix: str) -> Any:
 
 
 async def safe_stream_thinking(upstream_resp: httpx.Response):
-    """流式响应中扫描 `<thinking>`/`</thinking>` 标签，将第一对改写为 `<think>`/`</think>`，其余内容直接透传。"""
-    think_buffer = ""
-    in_think_block = False
-    prefix_emitted = False
-    close_replaced = False
+    """流式响应中将 `<thinking>...</thinking>` 解析为 Claude 风格的分块内容：
 
-    def patch_content(text: Optional[str]) -> Optional[str]:
-        nonlocal think_buffer, in_think_block, prefix_emitted, close_replaced
+    - 普通文本输出为 `{"type": "text", "text": "..."}`
+    - 思维链输出为 `{"type": "thinking", "text": "..."}`
+    - 其余字段保持原有 SSE JSON 结构
+    """
+    buffer = ""
+    in_thinking = False
 
-        if text is None or text == "" or close_replaced:
-            return text
+    start_len = len(THINKING_START_TAG)
+    end_len = len(THINKING_END_TAG)
 
-        think_buffer += text
-        out_parts: list[str] = []
-        pos = 0
+    def patch_content(text: Optional[str]) -> Optional[list[Dict[str, str]]]:
+        """将 content 字符串拆解为带 type 的内容块列表。"""
+        nonlocal buffer, in_thinking
 
-        while pos < len(think_buffer):
-            if not in_think_block:
-                start_idx = think_buffer.find(THINKING_START_TAG, pos)
-                if start_idx != -1:
-                    before_text = think_buffer[pos:start_idx]
-                    if before_text:
-                        out_parts.append(before_text)
+        if text is None or text == "":
+            return []
 
-                    if not prefix_emitted:
-                        out_parts.append(THINK_TAG)
-                        prefix_emitted = True
+        buffer += text
+        parts: list[Dict[str, str]] = []
 
-                    in_think_block = True
-                    pos = start_idx + len(THINKING_START_TAG)
-                else:
-                    remaining = think_buffer[pos:]
-                    if remaining:
-                        out_parts.append(remaining)
-                    think_buffer = ""
+        while True:
+            if in_thinking:
+                end_idx = buffer.find(THINKING_END_TAG)
+                if end_idx == -1:
+                    # 未找到结束标签，先输出除末尾可能的半截标签外的思维内容
+                    safe_len = max(0, len(buffer) - (end_len - 1))
+                    if safe_len > 0:
+                        chunk = buffer[:safe_len]
+                        if chunk:
+                            parts.append({"type": "thinking", "text": chunk})
+                        buffer = buffer[safe_len:]
                     break
+
+                chunk = buffer[:end_idx]
+                if chunk:
+                    parts.append({"type": "thinking", "text": chunk})
+                buffer = buffer[end_idx + end_len :]
+                in_thinking = False
             else:
-                end_idx = think_buffer.find(THINKING_END_TAG, pos)
-                if end_idx != -1:
-                    thinking_text = think_buffer[pos:end_idx]
-                    if thinking_text:
-                        out_parts.append(thinking_text)
-
-                    if not close_replaced:
-                        out_parts.append(THINK_END_TAG)
-                        close_replaced = True
-
-                    in_think_block = False
-                    pos = end_idx + len(THINKING_END_TAG)
-
-                    # 第一对标签处理完成，后续内容直接透传
-                    if close_replaced:
-                        tail = think_buffer[pos:]
-                        if tail:
-                            out_parts.append(tail)
-                        think_buffer = ""
-                        break
-                else:
-                    remaining = think_buffer[pos:]
-                    if remaining:
-                        out_parts.append(remaining)
-                    think_buffer = ""
+                start_idx = buffer.find(THINKING_START_TAG)
+                if start_idx == -1:
+                    # 未找到起始标签，输出除末尾可能的半截标签外的普通文本
+                    safe_len = max(0, len(buffer) - (start_len - 1))
+                    if safe_len > 0:
+                        chunk = buffer[:safe_len]
+                        if chunk:
+                            parts.append({"type": "text", "text": chunk})
+                        buffer = buffer[safe_len:]
                     break
 
-        return "".join(out_parts)
+                # 先输出标签前的文本
+                chunk = buffer[:start_idx]
+                if chunk:
+                    parts.append({"type": "text", "text": chunk})
+
+                buffer = buffer[start_idx + start_len :]
+                in_thinking = True
+
+        return parts
+
+    def flush_remaining_parts() -> list[Dict[str, str]]:
+        """在流结束前，将缓冲区剩余内容一次性输出。"""
+        nonlocal buffer, in_thinking
+        if not buffer:
+            return []
+        parts: list[Dict[str, str]] = []
+        if buffer:
+            parts.append(
+                {
+                    "type": "thinking" if in_thinking else "text",
+                    "text": buffer,
+                }
+            )
+        buffer = ""
+        return parts
 
     try:
         async for line in upstream_resp.aiter_lines():
-            if close_replaced:
-                yield (line + "\n").encode("utf-8")
-                continue
-
             if not line.startswith("data:"):
                 yield (line + "\n").encode("utf-8")
                 continue
 
             raw = line[5:].lstrip()
             if raw.strip() == "[DONE]":
+                remaining_parts = flush_remaining_parts()
+                if remaining_parts:
+                    final_obj = {"choices": [{"delta": {"content": remaining_parts}}]}
+                    final_line = "data: " + json.dumps(final_obj, ensure_ascii=False)
+                    yield (final_line + "\n").encode("utf-8")
                 yield (line + "\n").encode("utf-8")
                 continue
 
@@ -129,7 +142,11 @@ async def safe_stream_thinking(upstream_resp: httpx.Response):
                         continue
                     content = delta.get("content")
                     if isinstance(content, str):
-                        delta["content"] = patch_content(content)
+                        parts = patch_content(content)
+                        if parts:
+                            delta["content"] = parts
+                        else:
+                            delta.pop("content", None)
 
             out_line = "data: " + json.dumps(obj, ensure_ascii=False)
             yield (out_line + "\n").encode("utf-8")

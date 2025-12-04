@@ -143,7 +143,7 @@ async def list_models(
     request: Request = None,
     channel: Optional[str] = Query(None, description="可选：仅拉取指定渠道的模型"),
 ) -> JSONResponse:
-    """返回自定义模型列表（仅持久化 model_store）。"""
+    """返回统一模型列表：同一渠道下若某上游模型已配置别名，仅展示别名；否则展示原名。"""
     model_store: Dict[str, List[Dict[str, Any]]] = getattr(request.app.state, "model_store", {}) or {}
     models = _custom_models_as_list(model_store)
 
@@ -151,37 +151,53 @@ async def list_models(
     if channel:
         models = [m for m in models if (m.get("metadata", {}) or {}).get("channel") == channel]
 
-    # 1）构建 {channel: 被别名指向的原始模型 ID 集合}
-    alias_targets_by_channel: Dict[str, set] = {}
+    # 1）统计每个渠道下哪些上游模型 ID 拥有别名（根据 alias_for=客户端别名）
+    bases_with_alias: Dict[str, set] = {}
     for m in models:
         if not isinstance(m, dict):
             continue
-        alias_for = m.get("alias_for")
-        if not isinstance(alias_for, str) or not alias_for:
+        alias_name = m.get("alias_for")
+        if not isinstance(alias_name, str) or not alias_name.strip():
             continue
         meta = m.get("metadata") if isinstance(m.get("metadata"), dict) else {}
         ch_name = meta.get("channel") or ""
-        if ch_name not in alias_targets_by_channel:
-            alias_targets_by_channel[ch_name] = set()
-        alias_targets_by_channel[ch_name].add(alias_for)
+        upstream_id = m.get("id")
+        if not isinstance(upstream_id, str) or not upstream_id.strip():
+            continue
+        if ch_name not in bases_with_alias:
+            bases_with_alias[ch_name] = set()
+        bases_with_alias[ch_name].add(upstream_id.strip())
 
-    # 2）同一渠道内，如某个模型 id 已出现在 alias_for 集合中，则仅保留别名条目，隐藏原始条目
-    filtered: List[Dict[str, Any]] = []
+    # 2）生成对外展示列表：
+    #   - 对有别名的条目，用 alias_for 作为对外 ID，alias_for 字段回填上游真实 ID；
+    #   - 对没有别名且其上游 ID 未在 bases_with_alias 中的条目，直接按原名展示。
+    transformed: List[Dict[str, Any]] = []
     for m in models:
         if not isinstance(m, dict):
             continue
         meta = m.get("metadata") if isinstance(m.get("metadata"), dict) else {}
         ch_name = meta.get("channel") or ""
-        mid = m.get("id")
-        if (
-            not m.get("alias_for")
-            and isinstance(mid, str)
-            and mid in alias_targets_by_channel.get(ch_name, set())
-        ):
-            continue
-        filtered.append(m)
+        upstream_id = m.get("id")
+        alias_name = m.get("alias_for")
 
-    payload: Dict[str, Any] = {"object": "list", "data": filtered}
+        if isinstance(alias_name, str) and alias_name.strip():
+            alias_name = alias_name.strip()
+            out = dict(m)
+            # 对外暴露别名作为模型 ID，将上游真实模型 ID 放在 alias_for 字段中便于调试查看
+            out["id"] = alias_name
+            out["alias_for"] = upstream_id
+            transformed.append(out)
+        else:
+            if (
+                isinstance(upstream_id, str)
+                and upstream_id.strip()
+                and upstream_id.strip() in bases_with_alias.get(ch_name, set())
+            ):
+                # 该上游模型在本渠道已配置别名，隐藏原始条目
+                continue
+            transformed.append(m)
+
+    payload: Dict[str, Any] = {"object": "list", "data": transformed}
     return JSONResponse(content=payload, status_code=200)
 
 
@@ -396,29 +412,36 @@ async def save_custom_models(
     request.app.state.model_store = incoming
     persist_model_store(incoming)
 
-    # 新版：依据模型存储重构别名覆写规则，仅当 alias_for 存在时才提供「别名 -> 原始模型」映射。
+    # 根据新的约定重建覆写规则：
+    # - 「模型 ID」字段存储上游真实模型 ID；
+    # - 「别名目标」alias_for 为客户端请求使用的模型名（别名）。
+    # 因此：
+    #   * 若存在 alias_for，则构建【别名 -> 上游真实模型】的覆写规则；
+    #   * 若不存在 alias_for，但指定了 channel，则构建【原名 -> 原名】的规则，只做渠道绑定。
     fixed_overrides: Dict[str, OverrideRule] = {}
     for ch, items in incoming.items():
         for it in items:
             if not isinstance(it, dict):
                 continue
-            model_id = it.get("id")
-            alias_for = it.get("alias_for")
-            if not isinstance(model_id, str) or not model_id.strip():
+            upstream_id = it.get("id")
+            alias_name = it.get("alias_for")
+            if not isinstance(upstream_id, str) or not upstream_id.strip():
                 continue
-            model_id = model_id.strip()
-            if isinstance(alias_for, str) and alias_for.strip():
-                # 别名：客户端使用 model_id，将被覆写为 alias_for
-                fixed_overrides[model_id] = OverrideRule(
+            upstream_id = upstream_id.strip()
+
+            # 存在别名：客户端用 alias_name，请求会被覆写为 upstream_id
+            if isinstance(alias_name, str) and alias_name.strip():
+                alias_name = alias_name.strip()
+                fixed_overrides[alias_name] = OverrideRule(
                     channel=ch,
-                    target_model=alias_for.strip(),
+                    target_model=upstream_id,
                 )
+            # 无别名但绑定了渠道：按原名走该渠道
             elif ch:
-                # 没有 alias_for，只是简单绑定渠道，保持模型 ID 不变
-                if model_id not in fixed_overrides:
-                    fixed_overrides[model_id] = OverrideRule(
+                if upstream_id not in fixed_overrides:
+                    fixed_overrides[upstream_id] = OverrideRule(
                         channel=ch,
-                        target_model=model_id,
+                        target_model=upstream_id,
                     )
 
     request.app.state.override_map = fixed_overrides

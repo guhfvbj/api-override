@@ -312,14 +312,14 @@
         </div>
         <div class="modal-body flex-col">
             <label class="text-sm">
-                模型 ID (客户端请求的模型名)
-                <input id="editModelId" placeholder="例如: gpt-4-turbo">
+                模型 ID（上游真实模型 ID）
+                <input id="editModelId" placeholder="例如: claude-haiku-4.5-fox">
             </label>
             <label class="text-sm">
-                别名目标 (可选，填入上游真实模型 ID)
-                <input id="editModelTarget" placeholder="例如: gpt-4-0125-preview">
+                别名目标（可选，填写客户端请求时使用的模型名）
+                <input id="editModelTarget" placeholder="例如: claude-haiku-4.5-20251001">
                 <div class="text-sm text-muted" style="font-size: 0.75rem; margin-top: 4px;">
-                    若填写此项，则该模型 ID 将作为别名，指向此目标模型。
+                    若填写此项，则“别名目标”将作为客户端可见的模型名称，并映射到上方的模型 ID（上游真实模型）。
                 </div>
             </label>
             <label class="text-sm">

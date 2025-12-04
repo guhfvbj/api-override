@@ -5,6 +5,11 @@ import httpx
 
 from config import THINKING_SYSTEM_TEMPLATE, logger
 
+THINKING_START_TAG = "<thinking>"
+THINKING_END_TAG = "</thinking>"
+THINK_TAG = "<think>"
+THINK_END_TAG = "</think>"
+
 
 def build_thinking_system_prefix(max_length: int) -> str:
     """根据思考长度构造 antml 思考系统前缀。"""
@@ -26,53 +31,75 @@ def inject_thinking_system_prefix(messages: Any, prefix: str) -> Any:
 
 
 async def safe_stream_thinking(upstream_resp: httpx.Response):
-    """基于 SSE JSON 结构，仅对 thinking 段做标签覆写。
-
-    - 丢弃 choices[].delta.content 的前 10 个字符（假定为原始 `<thinking>`），只输出一次 `<think>`；
-    - 首次出现 `</thinking>` 时替换为 `</think>`；
-    - 之后的内容全部原样透传。
-    """
-    open_tag_len = 10  # `<thinking>` 的长度
-    dropped = 0  # 已丢弃的前缀字符数（跨 chunk 累积）
+    """流式响应中扫描 `<thinking>`/`</thinking>` 标签，将第一对改写为 `<think>`/`</think>`，其余内容直接透传。"""
+    think_buffer = ""
+    in_think_block = False
     prefix_emitted = False
     close_replaced = False
 
     def patch_content(text: Optional[str]) -> Optional[str]:
-        nonlocal dropped, prefix_emitted, close_replaced
-        if text is None or text == "":
+        nonlocal think_buffer, in_think_block, prefix_emitted, close_replaced
+
+        if text is None or text == "" or close_replaced:
             return text
 
-        s = text
-        out = ""
+        think_buffer += text
+        out_parts: list[str] = []
+        pos = 0
 
-        # 1. 丢弃整体前 10 个字符，只输出一次 `<think>`
-        if not prefix_emitted and dropped < open_tag_len:
-            need = open_tag_len - dropped
-            drop = min(len(s), need)
-            s = s[drop:]
-            dropped += drop
-            if dropped >= open_tag_len:
-                out += "<think>"
-                prefix_emitted = True
+        while pos < len(think_buffer):
+            if not in_think_block:
+                start_idx = think_buffer.find(THINKING_START_TAG, pos)
+                if start_idx != -1:
+                    before_text = think_buffer[pos:start_idx]
+                    if before_text:
+                        out_parts.append(before_text)
 
-        # 2. 将首次 `</thinking>` 替换为 `</think>`（只替一次）
-        if prefix_emitted and not close_replaced and s:
-            idx = s.find("</thinking>")
-            if idx != -1:
-                out += s[:idx]
-                out += "</think>"
-                close_replaced = True
-                out += s[idx + len("</thinking>") :]
-                return out
+                    if not prefix_emitted:
+                        out_parts.append(THINK_TAG)
+                        prefix_emitted = True
 
-        # 3. 其余内容原样透传
-        out += s
-        return out
+                    in_think_block = True
+                    pos = start_idx + len(THINKING_START_TAG)
+                else:
+                    remaining = think_buffer[pos:]
+                    if remaining:
+                        out_parts.append(remaining)
+                    think_buffer = ""
+                    break
+            else:
+                end_idx = think_buffer.find(THINKING_END_TAG, pos)
+                if end_idx != -1:
+                    thinking_text = think_buffer[pos:end_idx]
+                    if thinking_text:
+                        out_parts.append(thinking_text)
+
+                    if not close_replaced:
+                        out_parts.append(THINK_END_TAG)
+                        close_replaced = True
+
+                    in_think_block = False
+                    pos = end_idx + len(THINKING_END_TAG)
+
+                    # 第一对标签处理完成，后续内容直接透传
+                    if close_replaced:
+                        tail = think_buffer[pos:]
+                        if tail:
+                            out_parts.append(tail)
+                        think_buffer = ""
+                        break
+                else:
+                    remaining = think_buffer[pos:]
+                    if remaining:
+                        out_parts.append(remaining)
+                    think_buffer = ""
+                    break
+
+        return "".join(out_parts)
 
     try:
         async for line in upstream_resp.aiter_lines():
-            # thinking 开头和结尾都已经处理完，后续行直接透传
-            if prefix_emitted and close_replaced:
+            if close_replaced:
                 yield (line + "\n").encode("utf-8")
                 continue
 

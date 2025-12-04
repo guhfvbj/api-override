@@ -303,29 +303,33 @@
     </div>
 </div>
 
-<!-- Add Alias Modal -->
-<div id="aliasModal" class="modal-mask">
+<!-- Edit Model Modal -->
+<div id="editModelModal" class="modal-mask">
     <div class="modal" style="max-width: 500px;">
         <div class="card-header">
-            <span class="card-title">添加/修改别名</span>
-            <button class="btn btn-sm btn-secondary" onclick="closeModal('aliasModal')">✕</button>
+            <span class="card-title" id="editModelTitle">编辑模型</span>
+            <button class="btn btn-sm btn-secondary" onclick="closeModal('editModelModal')">✕</button>
         </div>
         <div class="modal-body flex-col">
             <label class="text-sm">
-                别名 ID (客户端请求的模型名)
-                <input id="aliasId" placeholder="例如: gpt-4-turbo">
+                模型 ID (客户端请求的模型名)
+                <input id="editModelId" placeholder="例如: gpt-4-turbo">
             </label>
             <label class="text-sm">
-                目标模型 ID (上游实际模型名)
-                <input id="aliasTarget" placeholder="例如: gpt-4-0125-preview">
+                别名目标 (可选，填入上游真实模型 ID)
+                <input id="editModelTarget" placeholder="例如: gpt-4-0125-preview">
+                <div class="text-sm text-muted" style="font-size: 0.75rem; margin-top: 4px;">
+                    若填写此项，则该模型 ID 将作为别名，指向此目标模型。
+                </div>
             </label>
             <label class="text-sm">
                 所属渠道
-                <select id="aliasChannelSelect"></select>
+                <select id="editModelChannel"></select>
             </label>
         </div>
         <div class="modal-footer">
-            <button class="btn btn-primary" id="saveAliasBtn">保存别名</button>
+            <button class="btn btn-danger" id="deleteModelBtn" style="margin-right: auto;">删除模型</button>
+            <button class="btn btn-primary" id="saveModelBtn">保存更改</button>
         </div>
     </div>
 </div>
@@ -348,9 +352,14 @@
         modelList: document.getElementById('modelList'),
         channelFilter: document.getElementById('channelFilter'),
         importTargetChannel: document.getElementById('importTargetChannel'),
-        aliasChannelSelect: document.getElementById('aliasChannelSelect'),
         importList: document.getElementById('importList'),
-        channelCount: document.getElementById('channelCount')
+        channelCount: document.getElementById('channelCount'),
+        // Edit Modal
+        editModelId: document.getElementById('editModelId'),
+        editModelTarget: document.getElementById('editModelTarget'),
+        editModelChannel: document.getElementById('editModelChannel'),
+        deleteModelBtn: document.getElementById('deleteModelBtn'),
+        saveModelBtn: document.getElementById('saveModelBtn')
     };
 
     // Utils
@@ -469,7 +478,7 @@
         els.channelFilter.value = currentFilter;
 
         els.importTargetChannel.innerHTML = options;
-        els.aliasChannelSelect.innerHTML = options;
+        els.editModelChannel.innerHTML = options;
     }
 
     function renderModels() {
@@ -496,6 +505,8 @@
                 hasModels = true;
                 const div = document.createElement('div');
                 div.className = 'list-item';
+                div.style.cursor = 'pointer';
+                div.onclick = () => openEditModelModal(channel, m);
                 
                 let badges = `<span class="badge badge-blue">${channel}</span>`;
                 let meta = `ID: ${m.id}`;
@@ -515,7 +526,9 @@
                         </div>
                         <div class="item-meta">${meta}</div>
                     </div>
-                    <button class="btn btn-sm btn-danger" onclick="deleteModel('${channel}', '${m.id}')">删除</button>
+                    <div style="color: var(--text-muted);">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                    </div>
                 `;
                 els.modelList.appendChild(div);
             });
@@ -533,14 +546,6 @@
         renderChannels();
         updateChannelSelects();
         toast('渠道已删除 (记得保存)', 'info');
-    };
-
-    window.deleteModel = (channel, id) => {
-        if (!confirm(`确定删除模型 ${id} 吗?`)) return;
-        state.models[channel] = state.models[channel].filter(m => m.id !== id);
-        if (state.models[channel].length === 0) delete state.models[channel];
-        renderModels();
-        toast('模型已删除 (记得保存)', 'info');
     };
 
     window.closeModal = (id) => {
@@ -582,6 +587,16 @@
     document.getElementById('importBtn').onclick = () => {
         document.getElementById('importModal').style.display = 'flex';
         updateChannelSelects();
+        // Auto select current filter if set
+        if (els.channelFilter.value) {
+            els.importTargetChannel.value = els.channelFilter.value;
+        }
+        // Clear list on open
+        els.importList.innerHTML = '<div class="text-sm text-muted">请选择渠道并点击拉取列表...</div>';
+    };
+
+    els.importTargetChannel.onchange = () => {
+        els.importList.innerHTML = '<div class="text-sm text-muted">请点击拉取列表...</div>';
     };
 
     document.getElementById('fetchUpstreamBtn').onclick = async () => {
@@ -595,6 +610,11 @@
             state.upstreamModels = data.data || [];
             
             els.importList.innerHTML = '';
+            if (state.upstreamModels.length === 0) {
+                els.importList.innerHTML = '<div class="text-sm text-muted">该渠道未返回任何模型</div>';
+                return;
+            }
+
             state.upstreamModels.forEach((m, idx) => {
                 const div = document.createElement('label');
                 div.className = 'list-item';
@@ -649,54 +669,95 @@
         toast(`已导入 ${count} 个模型 (记得保存)`, 'success');
     };
 
-    // Add Model Logic
+    // Edit / Add Model Logic
+    let currentEditModel = null; // { channel, id } or null for add
+
+    function openEditModelModal(channel, model) {
+        currentEditModel = { channel, id: model.id };
+        document.getElementById('editModelTitle').textContent = '编辑模型';
+        els.editModelId.value = model.id;
+        els.editModelId.disabled = true; // ID cannot be changed
+        els.editModelTarget.value = model.alias_for || '';
+        els.editModelChannel.value = channel;
+        els.deleteModelBtn.style.display = 'inline-flex';
+        document.getElementById('editModelModal').style.display = 'flex';
+    }
+
     document.getElementById('addModelBtn').onclick = () => {
-        const channel = els.channelFilter.value;
-        if (!channel) return toast('请先在左上角选择一个渠道', 'error');
-        
-        const id = prompt('请输入模型 ID:');
-        if (!id) return;
-
-        if (!state.models[channel]) state.models[channel] = [];
-        state.models[channel].push({
-            id: id,
-            object: 'model',
-            owned_by: 'custom',
-            metadata: { channel }
-        });
-        renderModels();
-        toast('模型已添加 (记得保存)', 'success');
+        currentEditModel = null;
+        document.getElementById('editModelTitle').textContent = '添加模型';
+        els.editModelId.value = '';
+        els.editModelId.disabled = false;
+        els.editModelTarget.value = '';
+        els.editModelChannel.value = els.channelFilter.value || '';
+        els.deleteModelBtn.style.display = 'none';
+        document.getElementById('editModelModal').style.display = 'flex';
     };
 
-    // Alias Logic
     document.getElementById('addAliasBtn').onclick = () => {
-        document.getElementById('aliasModal').style.display = 'flex';
-        updateChannelSelects();
+        // Alias is just a model with a target
+        currentEditModel = null;
+        document.getElementById('editModelTitle').textContent = '添加别名';
+        els.editModelId.value = '';
+        els.editModelId.disabled = false;
+        els.editModelTarget.value = '';
+        els.editModelChannel.value = els.channelFilter.value || '';
+        els.deleteModelBtn.style.display = 'none';
+        document.getElementById('editModelModal').style.display = 'flex';
     };
 
-    document.getElementById('saveAliasBtn').onclick = () => {
-        const id = document.getElementById('aliasId').value.trim();
-        const target = document.getElementById('aliasTarget').value.trim();
-        const channel = document.getElementById('aliasChannelSelect').value;
+    els.saveModelBtn.onclick = () => {
+        const id = els.editModelId.value.trim();
+        const target = els.editModelTarget.value.trim();
+        const newChannel = els.editModelChannel.value;
 
-        if (!id || !target || !channel) return toast('请填写完整信息', 'error');
+        if (!id || !newChannel) return toast('请填写模型 ID 和渠道', 'error');
 
-        if (!state.models[channel]) state.models[channel] = [];
+        // If editing, remove old entry first (channel might have changed)
+        if (currentEditModel) {
+            const oldCh = currentEditModel.channel;
+            const oldId = currentEditModel.id;
+            if (state.models[oldCh]) {
+                state.models[oldCh] = state.models[oldCh].filter(m => m.id !== oldId);
+                if (state.models[oldCh].length === 0) delete state.models[oldCh];
+            }
+        } else {
+            // Adding new: check if ID exists in target channel
+            if (state.models[newChannel] && state.models[newChannel].find(m => m.id === id)) {
+                if (!confirm(`模型 ${id} 在渠道 ${newChannel} 中已存在，是否覆盖?`)) return;
+                state.models[newChannel] = state.models[newChannel].filter(m => m.id !== id);
+            }
+        }
+
+        if (!state.models[newChannel]) state.models[newChannel] = [];
         
-        // Remove existing if any
-        state.models[channel] = state.models[channel].filter(m => m.id !== id);
-        
-        state.models[channel].push({
+        const newModel = {
             id: id,
             object: 'model',
-            owned_by: 'proxy-override',
-            alias_for: target,
-            metadata: { channel }
-        });
+            owned_by: target ? 'proxy-override' : 'custom',
+            metadata: { channel: newChannel }
+        };
+        if (target) newModel.alias_for = target;
 
+        state.models[newChannel].push(newModel);
+        
         renderModels();
-        closeModal('aliasModal');
-        toast('别名已添加 (记得保存)', 'success');
+        closeModal('editModelModal');
+        toast('模型已保存 (记得点击右上角保存所有更改)', 'success');
+    };
+
+    els.deleteModelBtn.onclick = () => {
+        if (!currentEditModel) return;
+        const { channel, id } = currentEditModel;
+        if (!confirm(`确定删除模型 ${id} 吗?`)) return;
+        
+        if (state.models[channel]) {
+            state.models[channel] = state.models[channel].filter(m => m.id !== id);
+            if (state.models[channel].length === 0) delete state.models[channel];
+        }
+        renderModels();
+        closeModal('editModelModal');
+        toast('模型已删除 (记得保存)', 'info');
     };
 
     // Init

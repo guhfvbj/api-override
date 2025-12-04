@@ -7,14 +7,14 @@ from config import logger
 
 
 def strip_trailing_slash(url: str) -> str:
-    """去掉 URL 末尾的斜杠，避免重复拼接路径。"""
+    """移除 URL 末尾的斜杠，避免重复拼接路径。"""
     if isinstance(url, str) and url.endswith("/"):
         return url[:-1]
     return url
 
 
 def log_payload(label: str, payload: Any, limit: int = 2000) -> None:
-    """调试用：记录请求或响应体，自动截断过长内容。"""
+    """调试用：记录请求或响应体，超长自动截断。"""
     try:
         if isinstance(payload, (dict, list)):
             text = json.dumps(payload, ensure_ascii=False)
@@ -45,7 +45,7 @@ def strip_undefined_fields(payload: Any) -> Any:
 
 
 def extract_error(resp: httpx.Response) -> Any:
-    """尽量从响应中解析出错误信息（JSON 为主，失败则返回文本）。"""
+    """尽量解析响应中的错误信息（优先 JSON，失败则返回文本）。"""
     try:
         return resp.json()
     except Exception:
@@ -53,9 +53,8 @@ def extract_error(resp: httpx.Response) -> Any:
 
 
 def extract_payload(resp: httpx.Response) -> Any:
-    """尽量把响应解析为 JSON，否则返回文本。"""
+    """尽量将响应解析为 JSON，失败则返回文本。"""
     try:
         return resp.json()
     except Exception:
         return resp.text
-

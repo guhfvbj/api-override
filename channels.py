@@ -3,7 +3,7 @@ from typing import Dict, Optional, Tuple
 
 from fastapi import HTTPException
 
-from config import NEWAPI_API_KEY, NEWAPI_BASE_URL, UPSTREAM_CHANNELS_RAW, BASE_DIR, logger
+from config import BASE_DIR, NEWAPI_API_KEY, NEWAPI_BASE_URL, UPSTREAM_CHANNELS_RAW, logger
 from overrides import OverrideRule
 from utils import strip_trailing_slash
 
@@ -16,8 +16,9 @@ def load_upstream_channels_from_env(raw: str = UPSTREAM_CHANNELS_RAW) -> Dict[st
         logger.warning("UPSTREAM_CHANNELS 不是合法 JSON，已忽略：%s", raw)
         return {}
     if not isinstance(data, dict):
-        logger.warning("UPSTREAM_CHANNELS 应该是对象类型，当前值：%s", data)
+        logger.warning("UPSTREAM_CHANNELS 应为对象类型，当前值：%s", data)
         return {}
+
     result: Dict[str, Dict[str, str]] = {}
     for name, cfg in data.items():
         if not isinstance(name, str) or not isinstance(cfg, dict):
@@ -34,7 +35,7 @@ def load_upstream_channels_from_env(raw: str = UPSTREAM_CHANNELS_RAW) -> Dict[st
 
 
 def persist_upstream_channels_to_env(channels: Dict[str, Dict[str, str]]) -> None:
-    """写入上游渠道配置到 .env 的 UPSTREAM_CHANNELS，保留其他行。"""
+    """把上游渠道配置写入 .env 的 UPSTREAM_CHANNELS，保留其他配置行。"""
     env_path = BASE_DIR / ".env"
     payload: Dict[str, Dict[str, str]] = {}
     for name, cfg in (channels or {}).items():
@@ -45,6 +46,7 @@ def persist_upstream_channels_to_env(channels: Dict[str, Dict[str, str]]) -> Non
         if not isinstance(base_url, str) or not isinstance(api_key, str):
             continue
         payload[name] = {"base_url": base_url, "api_key": api_key}
+
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     line = f"UPSTREAM_CHANNELS={raw}"
 
@@ -60,15 +62,15 @@ def choose_upstream_for_request(
     rule: Optional[OverrideRule],
     upstream_channels: Dict[str, Dict[str, str]],
 ) -> Tuple[str, str, Optional[str]]:
-    """根据覆写规则和渠道配置选择上游 base_url / api_key / X-Channel 名称。
+    """根据覆写规则与渠道配置选择上游 base_url / api_key / X-Channel 名。
 
-    选择顺序：
-    1. 若规则指定了渠道且配置存在，则优先使用该渠道；
-    2. 否则，如果配置了 NEWAPI_*，作为默认上游；
-    3. 再否则，从渠道列表中选择第一个合法渠道；
-    4. 都没有时抛出 500。
+    优先级：
+    1. 规则指定了渠道且配置存在 -> 使用该渠道
+    2. 否则，如果配置了 NEWAPI_* -> 使用单一 NEWAPI
+    3. 再否则，从渠道列表选择第一个合法项
+    4. 都没有则抛出 500
     """
-    # 若规则指定了渠道且配置存在，则优先使用该渠道
+    # 规则指定渠道且配置存在
     if rule and rule.channel:
         cfg = upstream_channels.get(rule.channel)
         if isinstance(cfg, dict):
@@ -77,11 +79,11 @@ def choose_upstream_for_request(
             if isinstance(base_url, str) and isinstance(api_key, str):
                 return strip_trailing_slash(base_url), api_key, rule.channel
 
-    # 否则，如果配置了 NEWAPI_*，作为默认上游
+    # 回退到单一 NEWAPI
     if NEWAPI_BASE_URL and NEWAPI_API_KEY:
         return strip_trailing_slash(NEWAPI_BASE_URL), NEWAPI_API_KEY, None
 
-    # 再否则，从渠道列表中选择第一个合法渠道
+    # 从渠道列表取第一个合法项
     for name, cfg in upstream_channels.items():
         if not isinstance(cfg, dict):
             continue
@@ -91,4 +93,3 @@ def choose_upstream_for_request(
             return strip_trailing_slash(base_url), api_key, name
 
     raise HTTPException(status_code=500, detail="没有可用的上游渠道或 NEWAPI 配置")
-

@@ -15,7 +15,7 @@ class OverrideRule:
 
 
 def override_from_dict(model_id: str, cfg: Any) -> Optional[OverrideRule]:
-    """将任意配置对象转换为 OverrideRule，兼容字符串与字典两种形式。"""
+    """将配置对象转换为 OverrideRule，兼容字符串与字典两种形式。"""
     if isinstance(cfg, str):
         # 简写："gpt-4o": "deepseek-chat"
         return OverrideRule(target_model=cfg)
@@ -36,7 +36,7 @@ def parse_override_map(raw: str) -> Dict[str, OverrideRule]:
         logger.warning("MODEL_OVERRIDE_MAP 不是合法 JSON，已忽略：%s", raw)
         return {}
     if not isinstance(parsed, dict):
-        logger.warning("MODEL_OVERRIDE_MAP 应该是对象类型，当前值：%s", parsed)
+        logger.warning("MODEL_OVERRIDE_MAP 应为对象类型，当前值：%s", parsed)
         return {}
 
     result: Dict[str, OverrideRule] = {}
@@ -140,4 +140,3 @@ def apply_overrides(
             patched["messages"] = inject_thinking_system_prefix(messages, prefix)
 
     return patched
-

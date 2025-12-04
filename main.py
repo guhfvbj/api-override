@@ -396,24 +396,39 @@ async def save_custom_models(
     request.app.state.model_store = incoming
     persist_model_store(incoming)
 
-    # 同步更新覆写规则 (OverrideMap)
-    new_overrides: Dict[str, OverrideRule] = {}
+    # 新版：依据模型存储重构别名覆写规则，仅当 alias_for 存在时才提供「别名 -> 原始模型」映射。
+    fixed_overrides: Dict[str, OverrideRule] = {}
     for ch, items in incoming.items():
         for it in items:
-            mid = it.get("id")
+            if not isinstance(it, dict):
+                continue
+            model_id = it.get("id")
             alias_for = it.get("alias_for")
-            if mid:
-                # 如果有 alias_for，则映射到 alias_for；否则保持原名
-                target = alias_for if alias_for else mid
-                # 只要该模型归属于某个渠道（ch），或者有别名定义，就建立路由规则
-                # 注意：如果 ch 为空且没有 alias_for，则不建立规则（走默认路由）
-                if ch or alias_for:
-                    new_overrides[mid] = OverrideRule(channel=ch, target_model=target)
-    
-    request.app.state.override_map = new_overrides
-    persist_overrides(new_overrides)
+            if not isinstance(model_id, str) or not model_id.strip():
+                continue
+            model_id = model_id.strip()
+            if isinstance(alias_for, str) and alias_for.strip():
+                # 别名：客户端使用 model_id，将被覆写为 alias_for
+                fixed_overrides[model_id] = OverrideRule(
+                    channel=ch,
+                    target_model=alias_for.strip(),
+                )
+            elif ch:
+                # 没有 alias_for，只是简单绑定渠道，保持模型 ID 不变
+                if model_id not in fixed_overrides:
+                    fixed_overrides[model_id] = OverrideRule(
+                        channel=ch,
+                        target_model=model_id,
+                    )
 
-    logger.info("模型存储已更新：%s，覆写规则已同步：%s", sum(len(v) for v in incoming.values()), len(new_overrides))
+    request.app.state.override_map = fixed_overrides
+    persist_overrides(fixed_overrides)
+
+    logger.info(
+        "模型存储已更新：%s，覆写规则已同步：%s",
+        sum(len(v) for v in incoming.values()),
+        len(fixed_overrides),
+    )
     return JSONResponse(content={"status": "ok", "count": sum(len(v) for v in incoming.values())})
 
 

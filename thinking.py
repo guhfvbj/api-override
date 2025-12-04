@@ -35,7 +35,7 @@ async def safe_stream_thinking(upstream_resp: httpx.Response):
 
     - 普通文本输出为 `{"type": "text", "text": "..."}`
     - 思维链输出为 `{"type": "thinking", "text": "..."}`
-    - 其余字段保持原有 SSE JSON 结构
+    - 向下游兼容：`delta.content` 仍然保持字符串（带 <think></think>），额外提供 `delta.content_blocks` 供富格式解析
     """
     buffer = ""
     in_thinking = False
@@ -43,15 +43,16 @@ async def safe_stream_thinking(upstream_resp: httpx.Response):
     start_len = len(THINKING_START_TAG)
     end_len = len(THINKING_END_TAG)
 
-    def patch_content(text: Optional[str]) -> Optional[list[Dict[str, str]]]:
-        """将 content 字符串拆解为带 type 的内容块列表。"""
+    def patch_content(text: Optional[str]) -> tuple[str, list[Dict[str, str]]]:
+        """将 content 字符串拆解为字符串输出 + 带 type 的内容块列表。"""
         nonlocal buffer, in_thinking
 
         if text is None or text == "":
-            return []
+            return "", []
 
         buffer += text
         parts: list[Dict[str, str]] = []
+        str_out: list[str] = []
 
         while True:
             if in_thinking:
@@ -63,14 +64,17 @@ async def safe_stream_thinking(upstream_resp: httpx.Response):
                         chunk = buffer[:safe_len]
                         if chunk:
                             parts.append({"type": "thinking", "text": chunk})
+                            str_out.append(chunk)
                         buffer = buffer[safe_len:]
                     break
 
                 chunk = buffer[:end_idx]
                 if chunk:
                     parts.append({"type": "thinking", "text": chunk})
+                    str_out.append(chunk)
                 buffer = buffer[end_idx + end_len :]
                 in_thinking = False
+                str_out.append(THINK_END_TAG)
             else:
                 start_idx = buffer.find(THINKING_START_TAG)
                 if start_idx == -1:
@@ -80,6 +84,7 @@ async def safe_stream_thinking(upstream_resp: httpx.Response):
                         chunk = buffer[:safe_len]
                         if chunk:
                             parts.append({"type": "text", "text": chunk})
+                            str_out.append(chunk)
                         buffer = buffer[safe_len:]
                     break
 
@@ -87,18 +92,21 @@ async def safe_stream_thinking(upstream_resp: httpx.Response):
                 chunk = buffer[:start_idx]
                 if chunk:
                     parts.append({"type": "text", "text": chunk})
+                    str_out.append(chunk)
 
                 buffer = buffer[start_idx + start_len :]
                 in_thinking = True
+                str_out.append(THINK_TAG)
 
-        return parts
+        return "".join(str_out), parts
 
-    def flush_remaining_parts() -> list[Dict[str, str]]:
+    def flush_remaining_parts() -> tuple[str, list[Dict[str, str]]]:
         """在流结束前，将缓冲区剩余内容一次性输出。"""
         nonlocal buffer, in_thinking
         if not buffer:
-            return []
+            return "", []
         parts: list[Dict[str, str]] = []
+        str_out: list[str] = []
         if buffer:
             parts.append(
                 {
@@ -106,8 +114,11 @@ async def safe_stream_thinking(upstream_resp: httpx.Response):
                     "text": buffer,
                 }
             )
+            str_out.append(THINK_TAG if in_thinking else "")
+            str_out.append(buffer)
+            str_out.append(THINK_END_TAG if in_thinking else "")
         buffer = ""
-        return parts
+        return "".join(str_out), parts
 
     try:
         async for line in upstream_resp.aiter_lines():
@@ -117,9 +128,11 @@ async def safe_stream_thinking(upstream_resp: httpx.Response):
 
             raw = line[5:].lstrip()
             if raw.strip() == "[DONE]":
-                remaining_parts = flush_remaining_parts()
+                remaining_str, remaining_parts = flush_remaining_parts()
                 if remaining_parts:
-                    final_obj = {"choices": [{"delta": {"content": remaining_parts}}]}
+                    final_delta: Dict[str, Any] = {"content": remaining_str} if remaining_str else {}
+                    final_delta["content_blocks"] = remaining_parts
+                    final_obj = {"choices": [{"delta": final_delta}]}
                     final_line = "data: " + json.dumps(final_obj, ensure_ascii=False)
                     yield (final_line + "\n").encode("utf-8")
                 yield (line + "\n").encode("utf-8")
@@ -142,9 +155,11 @@ async def safe_stream_thinking(upstream_resp: httpx.Response):
                         continue
                     content = delta.get("content")
                     if isinstance(content, str):
-                        parts = patch_content(content)
+                        content_str, parts = patch_content(content)
                         if parts:
-                            delta["content"] = parts
+                            delta["content_blocks"] = parts
+                        if content_str:
+                            delta["content"] = content_str
                         else:
                             delta.pop("content", None)
 

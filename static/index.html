@@ -234,6 +234,7 @@
             <span>模型列表</span>
             <div style="display:flex;align-items:center;gap:8px;">
               <button id="unhideModelsBtn" class="secondary">取消隐藏</button>
+              <button id="clearModelsCacheBtn" class="secondary">清空本地缓存</button>
               <span class="note">按渠道分组展示上游模型与代理别名，可手动隐藏/删除</span>
             </div>
           </div>
@@ -244,6 +245,27 @@
                 <option value="">全部渠道</option>
               </select>
             </label>
+          </div>
+          <div class="row">
+            <label>
+              本地模型 ID（仅保存在浏览器缓存）
+              <input id="localModelId" placeholder="如：my-local-model" />
+            </label>
+            <label>
+              本地渠道（可选）
+              <input id="localModelChannel" placeholder="如：local" />
+            </label>
+            <label>
+              owned_by（可选）
+              <input id="localModelOwnedBy" placeholder="默认 local" />
+            </label>
+            <label>
+              alias_for（可选，展示重定向关系）
+              <input id="localModelAliasFor" placeholder="如：upstream-model" />
+            </label>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button id="addLocalModelBtn" class="secondary">添加到本地列表</button>
           </div>
           <div id="modelsBox" class="models-list">
             <div class="note">点击右上角“刷新模型”拉取 /v1/models</div>
@@ -290,8 +312,7 @@
           <div class="note">
             <strong>Thinking 覆写说明：</strong><br />
             - 请求体中 <code>thinking.type = "enabled"</code> 且有
-            <code>budget_tokens</code> 时，代理会自动追加 antml 思考系统提示词（长度 =
-            <code>budget_tokens × 5</code>）；<br />
+            <code>budget_tokens</code> 时，代理会自动追加 antml 思考系统提示词（长度 = <code>budget_tokens</code>）；<br />
             - 流式响应中的 <code>&lt;thinking&gt;</code> 标签会被覆写为
             <code>&lt;think&gt;</code>；<br />
             - 未启用 thinking 时，只做模型重定向与渠道选择，不做额外替换。
@@ -356,6 +377,7 @@
       const reloadConfigBtn = document.getElementById("reloadConfigBtn");
       const modelsChannelFilter = document.getElementById("modelsChannelFilter");
       const unhideModelsBtn = document.getElementById("unhideModelsBtn");
+      const clearModelsCacheBtn = document.getElementById("clearModelsCacheBtn");
       const modelsBox = document.getElementById("modelsBox");
       const settingsModelId = document.getElementById("settingsModelId");
       const settingsTargetModel = document.getElementById("settingsTargetModel");
@@ -364,6 +386,11 @@
       const saveSettingsBtn = document.getElementById("saveSettingsBtn");
       const newAliasBtn = document.getElementById("newAliasBtn");
       const deleteAliasBtn = document.getElementById("deleteAliasBtn");
+      const addLocalModelBtn = document.getElementById("addLocalModelBtn");
+      const localModelId = document.getElementById("localModelId");
+      const localModelChannel = document.getElementById("localModelChannel");
+      const localModelOwnedBy = document.getElementById("localModelOwnedBy");
+      const localModelAliasFor = document.getElementById("localModelAliasFor");
       const configPreview = document.getElementById("configPreview");
       const logBox = document.getElementById("logBox");
       const statusLine = document.getElementById("statusLine");
@@ -379,6 +406,7 @@
         : "http://localhost:14300";
 
       let modelsCache = [];
+      let localModels = []; // 本地缓存的手动模型
       let modelSettings = {}; // { aliasId: { targetModel, channel } }
       let upstreamChannels = {};
       let currentBaseModelId = "";
@@ -445,11 +473,56 @@
         }
       }
 
+      function loadModelsCache() {
+        try {
+          const raw = localStorage.getItem("models_cache_v1") || "{}";
+          const obj = JSON.parse(raw);
+          if (obj && typeof obj === "object") {
+            modelsCache = Array.isArray(obj.remote) ? obj.remote : [];
+            localModels = Array.isArray(obj.local) ? obj.local : [];
+          }
+        } catch {
+          modelsCache = [];
+          localModels = [];
+        }
+      }
+
+      function saveModelsCache() {
+        try {
+          const payload = { remote: modelsCache || [], local: localModels || [] };
+          localStorage.setItem("models_cache_v1", JSON.stringify(payload));
+        } catch {
+          // 忽略本地存储错误
+        }
+      }
+
+      function getMergedModels() {
+        // 合并远程与本地模型，按 (channel::id) 去重，优先本地
+        const map = new Map();
+        const push = (item, isLocal = false) => {
+          if (!item || typeof item !== "object" || !item.id) return;
+          const ch = (item.metadata && item.metadata.channel) || "";
+          const key = `${ch}::${item.id}`;
+          if (isLocal || !map.has(key)) map.set(key, item);
+        };
+        (modelsCache || []).forEach((m) => push(m, false));
+        (localModels || []).forEach((m) => push(m, true));
+        return Array.from(map.values());
+      }
+
       unhideModelsBtn.onclick = () => {
         hiddenModels = new Set();
         saveHiddenModels();
-        renderModelList(modelsCache);
+        renderModelList(getMergedModels());
         setStatus("已取消隐藏所有模型。");
+      };
+
+      clearModelsCacheBtn.onclick = () => {
+        modelsCache = [];
+        localModels = [];
+        saveModelsCache();
+        renderModelList([]);
+        setStatus("已清空本地模型缓存。");
       };
 
       function renderChannels() {
@@ -514,7 +587,7 @@
             const ch = item.metadata && item.metadata.channel;
             return !removed.includes(ch);
           });
-          renderModelList(modelsCache);
+          renderModelList(getMergedModels());
         }
       }
 
@@ -579,20 +652,20 @@
             const delBtn = document.createElement("button");
             delBtn.type = "button";
             delBtn.className = "danger";
-            delBtn.textContent = isAlias ? "删别名" : "隐藏";
-            delBtn.onclick = async (ev) => {
-              ev.stopPropagation();
-              if (isAlias) {
-                await deleteAliasById(item.id);
-              } else {
-                const key = `${ch}::${item.id}`;
-                hiddenModels.add(key);
-                saveHiddenModels();
-                renderModelList(modelsCache);
-                setStatus(`已从列表隐藏模型 ${item.id}（渠道=${ch}）`);
-              }
-            };
-            row.appendChild(delBtn);
+              delBtn.textContent = isAlias ? "删别名" : "隐藏";
+              delBtn.onclick = async (ev) => {
+                ev.stopPropagation();
+                if (isAlias) {
+                  await deleteAliasById(item.id);
+                } else {
+                  const key = `${ch}::${item.id}`;
+                  hiddenModels.add(key);
+                  saveHiddenModels();
+                  renderModelList(getMergedModels());
+                  setStatus(`已从列表隐藏模型 ${item.id}（渠道=${ch}）`);
+                }
+              };
+              row.appendChild(delBtn);
 
             modelsBox.appendChild(row);
           });
@@ -612,7 +685,8 @@
           const data = await resp.json();
           if (!resp.ok) throw new Error(JSON.stringify(data));
           modelsCache = data.data || [];
-          renderModelList(modelsCache);
+          saveModelsCache();
+          renderModelList(getMergedModels());
           setStatus("模型列表已更新，点击模型可编辑覆写设置。");
         } catch (err) {
           modelsBox.textContent = "获取失败";
@@ -808,7 +882,7 @@
 
       modelsChannelFilter.onchange = () => {
         // 切换渠道时仅基于已缓存的模型做前端筛选，不触发新的拉取
-        renderModelList(modelsCache);
+        renderModelList(getMergedModels());
       };
 
       addChannelBtn.onclick = async () => {
@@ -833,9 +907,40 @@
         setStatus(`渠道 ${name} 已更新并同步到 .env（UPSTREAM_CHANNELS）。`);
       };
 
+      addLocalModelBtn.onclick = () => {
+        const id = (localModelId.value || "").trim();
+        if (!id) {
+          setStatus("请填写本地模型 ID。");
+          return;
+        }
+        const channel = (localModelChannel.value || "").trim();
+        const ownedBy = (localModelOwnedBy.value || "local").trim();
+        const aliasFor = (localModelAliasFor.value || "").trim();
+
+        const modelObj = {
+          id,
+          object: "model",
+          owned_by: ownedBy || "local",
+          metadata: channel ? { channel } : {},
+        };
+        if (aliasFor) modelObj.alias_for = aliasFor;
+
+        const key = `${channel || ""}::${id}`;
+        localModels = (localModels || []).filter((m) => {
+          const ch = (m.metadata && m.metadata.channel) || "";
+          return `${ch}::${m.id}` !== key;
+        });
+        localModels.push(modelObj);
+        saveModelsCache();
+        renderModelList(getMergedModels());
+        setStatus(`已添加本地模型 ${id}${channel ? `（渠道 ${channel}）` : ""}`);
+      };
+
       (async function init() {
         hydrateEndpointAndKey();
         loadHiddenModels();
+        loadModelsCache();
+        renderModelList(getMergedModels());
         await fetchChannels();
         await fetchOverrides();
         // 初始拉取一次模型列表，后续只在点击“刷新模型”时拉取
@@ -857,13 +962,14 @@
         // 重写模型列表渲染逻辑
         window.renderModelList = function (list) {
           modelsBox.textContent = "";
-          if (!list || !list.length) {
+          const data = list && list.length ? list : getMergedModels();
+          if (!data || !data.length) {
             modelsBox.textContent = "暂无模型，请确认上游配置是否正确";
             return;
           }
 
           const groups = {};
-          (list || []).forEach((item) => {
+          (data || []).forEach((item) => {
             if (!item || typeof item !== "object") return;
             // 列表中仅展示上游模型，不单独展示代理生成的别名模型
             if (item.owned_by === "proxy-override") return;
@@ -934,7 +1040,7 @@
                 const key = `${ch}::${item.id}`;
                 hiddenModels.add(key);
                 saveHiddenModels();
-                renderModelList(modelsCache);
+                renderModelList(getMergedModels());
                 setStatus(`已从列表隐藏模型 ${item.id}（渠道 ${ch}）`);
               };
               row.appendChild(delBtn);
